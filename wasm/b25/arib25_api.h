@@ -1,0 +1,1 @@
+#define ARIB25_API_EXPORT

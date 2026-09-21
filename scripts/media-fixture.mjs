@@ -1,0 +1,51 @@
+import { mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+
+mkdirSync(new URL('../tests/fixtures/generated/', import.meta.url), { recursive: true });
+const result = spawnSync(
+  'ffmpeg',
+  [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=1920x1080:rate=60000/1001',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=1000:sample_rate=48000',
+    '-t',
+    '3',
+    '-vf',
+    'tinterlace=mode=interleave_top',
+    '-c:v',
+    'mpeg2video',
+    '-flags',
+    '+ilme+ildct',
+    '-top',
+    '1',
+    '-b:v',
+    '12M',
+    '-bf',
+    '2',
+    '-g',
+    '15',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-ac',
+    '2',
+    '-mpegts_service_id',
+    '1',
+    '-f',
+    'mpegts',
+    new URL('../tests/fixtures/generated/hd.ts', import.meta.url).pathname,
+  ],
+  { stdio: 'inherit' },
+);
+if (result.error) throw result.error;
+if (result.status !== 0) throw new Error('HD MPEG-2/AAC fixture generation failed');
