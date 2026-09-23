@@ -68,10 +68,9 @@ function usb() {
     }),
     claimInterface: vi.fn(async () => {}),
     releaseInterface: vi.fn(async () => {}),
-    transferIn: vi.fn(async (_endpoint: number, length: number): Promise<USBInTransferResult> => {
-      if (length === 1024) return { status: 'ok', data: new DataView(new ArrayBuffer(512)) };
-      return new Promise((resolve) => pending.push(resolve));
-    }),
+    transferIn: vi.fn(
+      async (): Promise<USBInTransferResult> => new Promise((resolve) => pending.push(resolve)),
+    ),
   };
   let disconnect: (e: USBConnectionEvent) => void = () => {};
   vi.stubGlobal('window', { isSecureContext: true });
@@ -146,10 +145,10 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
     [0xda1d, 0, 1],
   ]);
   expect(mocks.i2cWrite).toHaveBeenCalledWith(0x10, new Uint8Array([0x1d, 0]));
-  expect(device.transferIn.mock.invocationCallOrder[0]).toBeLessThan(
-    mocks.i2cWrite.mock.invocationCallOrder[0],
+  expect(mocks.i2cWrite.mock.invocationCallOrder[0]).toBeLessThan(
+    device.transferIn.mock.invocationCallOrder[0],
   );
-  expect(device.transferIn.mock.calls[0]).toEqual([4, 1024]);
+  expect(device.transferIn.mock.calls[0]).toEqual([4, 188 * 816]);
   expect(pending).toHaveLength(4);
   expect(session.receiver.state).toBe('streaming');
   vi.spyOn(session.receiver, 'tune').mockResolvedValue({ demodLocked: true } as never);
@@ -305,28 +304,24 @@ it('cleans up on unplug and does not forward stale pending transfers', async () 
   expect(mocks.workerClose).toHaveBeenCalledTimes(1);
 });
 
-it('restores the purge register and closes after purge failure without enabling TS', async () => {
+it('closes after stream reset failure without enabling TS', async () => {
   const { device } = usb();
-  device.transferIn.mockResolvedValue({ status: 'stall' });
+  mocks.mask.mockRejectedValueOnce(new Error('reset failed'));
   const session = await ReceiverSession.connect(
     () => {},
     () => {},
   );
   session.receiver.state = 'locked';
-  await expect(session.startCapture()).rejects.toThrow('stall');
-  expect(mocks.mask).toHaveBeenLastCalledWith(0xda1d, 0, 1);
+  await expect(session.startCapture()).rejects.toThrow('reset failed');
   expect(mocks.i2cWrite).not.toHaveBeenCalled();
   expect(device.close).toHaveBeenCalledTimes(1);
 });
 
-it('stopping during purge invalidates the start generation before TS pins can be enabled', async () => {
+it('stopping during stream reset invalidates start before TS pins can be enabled', async () => {
   const { device } = usb();
-  let resolvePurge!: (result: USBInTransferResult) => void;
-  device.transferIn.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        resolvePurge = resolve;
-      }),
+  let resolveReset!: () => void;
+  mocks.mask.mockImplementationOnce(
+    () => new Promise((resolve) => { resolveReset = resolve; }),
   );
   const session = await ReceiverSession.connect(
     () => {},
@@ -335,9 +330,9 @@ it('stopping during purge invalidates the start generation before TS pins can be
   session.receiver.state = 'locked';
   const start = session.startCapture();
   const assertion = expect(start).rejects.toThrow('stopped');
-  await vi.waitFor(() => expect(device.transferIn).toHaveBeenCalled());
+  await vi.waitFor(() => expect(mocks.mask).toHaveBeenCalled());
   const close = session.close();
-  resolvePurge({ status: 'ok', data: new DataView(new ArrayBuffer(512)) });
+  resolveReset();
   await close;
   await assertion;
   expect(mocks.i2cWrite).not.toHaveBeenCalled();

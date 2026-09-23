@@ -95,9 +95,7 @@ export class ReceiverSession {
     const epoch = ++this.epoch;
     const { stream, worker } = this.wireStream(epoch);
     try {
-      await this.receiver.startCapture(async () => {
-        await stream.read(1024);
-      });
+      await this.receiver.startCapture();
       if (this.closing || epoch !== this.epoch) return;
       this.serveStream(epoch, stream, worker);
     } catch (error) {

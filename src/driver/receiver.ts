@@ -189,16 +189,14 @@ export class Receiver {
     });
   }
 
-  startCapture(purge: () => Promise<void>): Promise<void> {
+  startCapture(): Promise<void> {
     if (this.state !== 'locked')
       return Promise.reject(new Error('Demod lock required for TS capture'));
     return this.run(async () => {
+      // Reset the stream output before enabling TS pins. A Bulk IN here can
+      // wait forever when a previous page completed its shutdown on reload.
       await this.bridge.mask(0xda1d, 1, 1);
-      try {
-        await purge();
-      } finally {
-        await this.bridge.mask(0xda1d, 0, 1);
-      }
+      await this.bridge.mask(0xda1d, 0, 1);
       this.check();
       // tc90522_enable_ts_pins_t, terrestrial receiver index 2 (address 0x10).
       await this.bridge.i2cWrite(0x10, new Uint8Array([0x1d, 0x00]));
