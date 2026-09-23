@@ -138,6 +138,7 @@ export function LogPanel({ logs }: { logs: string[] }) {
     <Paper bg="dark.9" style={{ overflow: 'hidden' }}>
       <Box
         component="pre"
+        className="receiver-log"
         ref={logRef}
         tabIndex={0}
         aria-label="Receiver log"
@@ -146,7 +147,7 @@ export function LogPanel({ logs }: { logs: string[] }) {
           followLogs.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 1;
         }}
         m={0}
-        h={74}
+        h={37}
         py="4"
         px="8"
         c="gray.4"

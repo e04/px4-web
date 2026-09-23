@@ -24,9 +24,9 @@ const PIP_CSS = [
   '.pip-controls{position:absolute;inset:0;pointer-events:none}',
   '.pip-controls .video-controls{opacity:0;transition:opacity .15s ease-in-out}',
   '.pip-wrap:hover .pip-controls .video-controls,.pip-wrap:focus-within .pip-controls .video-controls{opacity:1}',
-  '.pip-controls-gradient{position:absolute;left:0;right:0;bottom:0;height:72px;background:linear-gradient(to top,rgba(0,0,0,.65),transparent)}',
+  '.pip-controls-gradient{position:absolute;left:0;right:0;bottom:0;height:96px;background:linear-gradient(to top,rgba(0,0,0,.8),transparent)}',
   '.pip-controls-actions{position:absolute;left:8px;bottom:8px;pointer-events:auto}',
-  '.pip-program-info{position:absolute;right:16px;bottom:12px;max-width:min(60%,480px);color:#fff;text-align:right;overflow-wrap:anywhere}',
+  '.pip-program-info{position:absolute;right:16px;bottom:12px;max-width:calc(100% - 32px);color:#fff;text-align:right;overflow-wrap:anywhere}',
 ].join('');
 
 export function isDocumentPipSupported(): boolean {

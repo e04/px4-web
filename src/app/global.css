@@ -12,6 +12,14 @@ body {
   overflow-x: clip;
 }
 
+.receiver-log {
+  scrollbar-width: none;
+}
+
+.receiver-log::-webkit-scrollbar {
+  display: none;
+}
+
 .television-canvas {
   display: block;
   width: 100%;
@@ -83,7 +91,7 @@ body {
   right: 16px;
   bottom: 12px;
   z-index: 3;
-  max-width: min(60%, 480px);
+  max-width: calc(100% - 32px);
   color: white;
   text-align: right;
   overflow-wrap: anywhere;

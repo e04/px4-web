@@ -23,7 +23,7 @@ export default function App() {
     const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false });
     setLogs((current) => [
       ...current.slice(-199),
-      `${error ? '[ERROR] ' : ''}${timestamp}  ${message}`,
+      `${error ? '[ERROR] ' : ''}[${timestamp}]  ${message}`,
     ]);
   }, []);
 

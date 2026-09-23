@@ -134,8 +134,8 @@ export function VideoStage({
                 left: 0,
                 right: 0,
                 bottom: 0,
-                height: 72,
-                background: 'linear-gradient(to top, rgba(0, 0, 0, 0.65), transparent)',
+                height: 96,
+                background: 'linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent)',
                 pointerEvents: 'none',
                 zIndex: 2,
               }}
