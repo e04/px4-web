@@ -115,18 +115,27 @@ describe('scan persistence and labels', () => {
 
 describe('scanChannels', () => {
   it('moves on once every discovered service has present and following EIT', async () => {
-    const session = fakeSession({ 13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] } });
+    const session = fakeSession({
+      13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] },
+    });
     const refresh = session.refreshTransport.bind(session);
     const event = { id: 1, title: 'Now', description: '', start: 100, end: 200 };
     let calls = 0;
     session.refreshTransport = async () => {
       await refresh();
       calls++;
-      if (calls >= 2) session.transport!.programs![1] = { stationName: 'A', current: event, next: { ...event, id: 2 } };
+      if (calls >= 2)
+        session.transport!.programs![1] = {
+          stationName: 'A',
+          current: event,
+          next: { ...event, id: 2 },
+        };
     };
     const seen: number[] = [];
     await scanChannels(session, {
-      channels: [13], siSettleMs: 5000, pollMs: 0,
+      channels: [13],
+      siSettleMs: 5000,
+      pollMs: 0,
       onPrograms: (channel, programs) => {
         seen.push(channel);
         expect(programs[1]?.next?.id).toBe(2);
@@ -171,5 +180,25 @@ describe('scanChannels', () => {
         isAborted: () => ++calls > 1,
       }),
     ).rejects.toThrow('Scan cancelled');
+  });
+
+  it('cancels the SI polling delay without waiting for its timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = fakeSession({ 13: { locked: true } });
+      const controller = new AbortController();
+      const scan = scanChannels(session, {
+        channels: [13],
+        siSettleMs: 30_000,
+        pollMs: 30_000,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(session.transport).toBeDefined());
+      controller.abort();
+      await expect(scan).rejects.toThrow('Scan cancelled');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

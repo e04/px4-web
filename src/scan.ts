@@ -18,7 +18,22 @@ export const SCAN_STORAGE_KEY = 'px4-scan-v1';
 // UHF physical channels for terrestrial broadcasts in Japan.
 export const SCAN_CHANNELS = Array.from({ length: 50 }, (_, index) => index + 13);
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Scan cancelled'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
+    }, ms);
+    const cancel = () => {
+      clearTimeout(timer);
+      reject(new Error('Scan cancelled'));
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
 
 function isScanEntry(value: unknown): value is ScanEntry {
   if (typeof value !== 'object' || value === null) return false;
@@ -87,7 +102,15 @@ export interface ScanSession {
   readonly receiving?: boolean;
   transport?: {
     services?: { serviceId: number }[];
-    programs?: Record<number, { stationName?: string; current?: ProgramEvent | null; next?: ProgramEvent | null; future?: ProgramEvent[] }>;
+    programs?: Record<
+      number,
+      {
+        stationName?: string;
+        current?: ProgramEvent | null;
+        next?: ProgramEvent | null;
+        future?: ProgramEvent[];
+      }
+    >;
   };
 }
 
@@ -96,13 +119,17 @@ export interface ScanOptions {
   tuneTimeoutMs?: number;
   siSettleMs?: number;
   pollMs?: number;
+  signal?: AbortSignal;
   isAborted?: () => boolean;
   onProgress?: (channel: number, entry: ScanEntry, done: number, total: number) => void;
-  onPrograms?: (channel: number, programs: NonNullable<NonNullable<ScanSession['transport']>['programs']>) => Promise<void> | void;
+  onPrograms?: (
+    channel: number,
+    programs: NonNullable<NonNullable<ScanSession['transport']>['programs']>,
+  ) => Promise<void> | void;
 }
 
 const aborted = (options: ScanOptions) => {
-  if (options.isAborted?.()) throw new Error('Scan cancelled');
+  if (options.signal?.aborted || options.isAborted?.()) throw new Error('Scan cancelled');
 };
 
 /**
@@ -140,10 +167,12 @@ export async function scanChannels(
           continue;
         }
         await session.startCapture();
+        aborted(options);
         streaming = true;
       } else {
         try {
           const tuned = await session.retune(channel);
+          aborted(options);
           if (!tuned.demodLocked) {
             record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
             continue;
@@ -173,6 +202,7 @@ export async function scanChannels(
       for (;;) {
         aborted(options);
         await session.refreshTransport();
+        aborted(options);
         const transport = session.transport;
         const current = (transport?.services ?? []).map((service) => ({
           serviceId: service.serviceId,
@@ -183,18 +213,24 @@ export async function scanChannels(
           (current.length > 0 && current.every((service) => service.stationName))
         )
           services = current;
-        if (current.length > 0 && current.every((service) => {
-          const program = transport?.programs?.[service.serviceId];
-          return program?.current && program?.next;
-        })) break;
+        if (
+          current.length > 0 &&
+          current.every((service) => {
+            const program = transport?.programs?.[service.serviceId];
+            return program?.current && program?.next;
+          })
+        )
+          break;
         if (Date.now() >= deadline) break;
-        await delay(pollMs);
+        await delay(pollMs, options.signal);
       }
     } catch {
       aborted(options);
       // Keep the lock with whatever was collected so far.
     }
-    if (session.transport?.programs) await options.onPrograms?.(channel, session.transport.programs);
+    if (session.transport?.programs)
+      await options.onPrograms?.(channel, session.transport.programs);
+    aborted(options);
     record(channel, { locked: true, services, scannedAt: Date.now() }, done);
   }
   return result;

@@ -64,6 +64,7 @@ export default function App() {
         />
         <ScanModal
           scanning={session.scanning}
+          cancelling={session.scanCancelling}
           scanProgress={session.scanProgress}
           scanEvents={session.scanEvents}
           onCancel={session.cancelScan}
@@ -95,17 +96,18 @@ export default function App() {
                 onVolumeChange={playback.setVolume}
                 onExitPip={() => playback.closePip()}
               />
-              {playback.pipControlsHost && createPortal(
-                <PipControls
-                  captionEnabled={playback.captionEnabled}
-                  volume={playback.volume}
-                  stationName={selectedProgram?.stationName ?? ''}
-                  programName={currentProgram?.title ?? ''}
-                  onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
-                  onVolumeChange={playback.setVolume}
-                />,
-                playback.pipControlsHost,
-              )}
+              {playback.pipControlsHost &&
+                createPortal(
+                  <PipControls
+                    captionEnabled={playback.captionEnabled}
+                    volume={playback.volume}
+                    stationName={selectedProgram?.stationName ?? ''}
+                    programName={currentProgram?.title ?? ''}
+                    onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
+                    onVolumeChange={playback.setVolume}
+                  />,
+                  playback.pipControlsHost,
+                )}
               <ProgramInfo service={session.service} programs={session.transport?.programs} />
               <MetricsGrid
                 stream={session.stream}

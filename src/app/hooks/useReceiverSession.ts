@@ -59,8 +59,10 @@ export function useReceiverSession({
   const [service, setService] = useState<string | null>(null);
   const [services, setServices] = useState<number[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [scanCancelling, setScanCancelling] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const scanAbortRef = useRef(false);
+  const scanControllerRef = useRef<AbortController | null>(null);
   const [scanEvents, setScanEvents] = useState<ScanResult[]>([]);
   const [channelEpg, setChannelEpg] = useState<Record<string, EpgMap>>({});
   const [epgNow, setEpgNow] = useState(Date.now());
@@ -70,7 +72,9 @@ export function useReceiverSession({
       ...visibleChannels(scan).map((item) => {
         const entry = scan[String(item)];
         const event = currentChannelProgram(
-          channelEpg[String(item)], entry?.services.map((service) => service.serviceId) ?? [], epgNow,
+          channelEpg[String(item)],
+          entry?.services.map((service) => service.serviceId) ?? [],
+          epgNow,
         );
         const station = channelLabel(item, entry);
         return {
@@ -125,11 +129,16 @@ export function useReceiverSession({
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all(SCAN_CHANNELS.map(async (number) => [String(number), await loadEpg(String(number))] as const)).then((entries) => {
+    void Promise.all(
+      SCAN_CHANNELS.map(async (number) => [String(number), await loadEpg(String(number))] as const),
+    ).then((entries) => {
       if (!cancelled) setChannelEpg((current) => ({ ...Object.fromEntries(entries), ...current }));
     });
     const timer = window.setInterval(() => setEpgNow(Date.now()), 30000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -161,9 +170,15 @@ export function useReceiverSession({
     epgDirty.current = false;
     void loadEpg(channel).then((saved) => {
       if (cancelled) return;
-      const merged = mergeEpg(saved, Object.fromEntries(
-        Object.entries(epgRef.current).map(([id, future]) => [id, { serviceId: Number(id), stationName: '', current: null, next: null, future }]),
-      ));
+      const merged = mergeEpg(
+        saved,
+        Object.fromEntries(
+          Object.entries(epgRef.current).map(([id, future]) => [
+            id,
+            { serviceId: Number(id), stationName: '', current: null, next: null, future },
+          ]),
+        ),
+      );
       epgRef.current = merged;
       setChannelEpg((current) => ({ ...current, [channel]: merged }));
     });
@@ -381,7 +396,11 @@ export function useReceiverSession({
   };
 
   const cancelScan = () => {
+    if (!scanActiveRef.current || scanAbortRef.current) return;
     scanAbortRef.current = true;
+    scanControllerRef.current?.abort();
+    setScanCancelling(true);
+    setStatus('Cancelling scan…');
   };
 
   // Scan CH 13-62 in order, persisting station names for the channel labels.
@@ -389,6 +408,9 @@ export function useReceiverSession({
   const runScan = async (fromConnect = false) => {
     if (scanning || (busy && !fromConnect)) return;
     scanAbortRef.current = false;
+    setScanCancelling(false);
+    const controller = new AbortController();
+    scanControllerRef.current = controller;
     scanActiveRef.current = true;
     setScanning(true);
     setBusy(true);
@@ -436,6 +458,7 @@ export function useReceiverSession({
     };
     try {
       const firmware = await ensureFirmware();
+      if (controller.signal.aborted) throw new Error('Scan cancelled');
       stopPlayer();
       if (!session) {
         const fresh = await ReceiverSession.connect(onReceiverEvent, () => {});
@@ -449,18 +472,25 @@ export function useReceiverSession({
         );
         await fresh.receiver.initialize(firmware);
       }
+      if (controller.signal.aborted) throw new Error('Scan cancelled');
       setStatus(`Scanning channels (0/${SCAN_CHANNELS.length})`);
       await scanChannels(session, {
+        signal: controller.signal,
         isAborted: () => scanAbortRef.current,
         onPrograms: async (found, programs) => {
           const channelKey = String(found);
           const saved = await loadEpg(channelKey);
           const complete: Record<number, ProgramInfo> = Object.fromEntries(
-            Object.entries(programs).map(([id, program]) => [id, {
-              serviceId: Number(id), stationName: program.stationName ?? '',
-              current: program.current ?? null, next: program.next ?? null,
-              future: program.future ?? [],
-            }]),
+            Object.entries(programs).map(([id, program]) => [
+              id,
+              {
+                serviceId: Number(id),
+                stationName: program.stationName ?? '',
+                current: program.current ?? null,
+                next: program.next ?? null,
+                future: program.future ?? [],
+              },
+            ]),
           );
           const next = mergeEpg(saved, complete);
           await saveEpg(channelKey, next);
@@ -476,6 +506,7 @@ export function useReceiverSession({
           setStatus(`Scanning CH ${found} (${done}/${total})`);
         },
       });
+      if (controller.signal.aborted) throw new Error('Scan cancelled');
       const locked = Object.values(merged).filter((entry) => entry.locked);
       addLog(`Scan complete: ${locked.length}/${SCAN_CHANNELS.length} channels receivable`);
       await restore(merged);
@@ -496,8 +527,10 @@ export function useReceiverSession({
         await restore(merged);
       }
     } finally {
+      if (scanControllerRef.current === controller) scanControllerRef.current = null;
       scanActiveRef.current = false;
       setScanning(false);
+      setScanCancelling(false);
       setBusy(false);
       setScanProgress(null);
     }
@@ -510,6 +543,7 @@ export function useReceiverSession({
     services,
     channelOptions,
     scanning,
+    scanCancelling,
     scanProgress,
     scanEvents,
     transport,

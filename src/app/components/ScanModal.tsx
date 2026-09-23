@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
 import { Button, Group, Modal, Progress, ScrollArea, Stack, Text } from '@mantine/core';
-import { SCAN_CHANNELS, representativeName } from '../../scan';
+import { representativeName } from '../../scan';
 import type { ScanProgress, ScanResult } from '../hooks/useReceiverSession';
 
 interface ScanModalProps {
   scanning: boolean;
+  cancelling: boolean;
   scanProgress: ScanProgress | null;
   scanEvents: ScanResult[];
   onCancel: () => void;
 }
 
-export function ScanModal({ scanning, scanProgress, scanEvents, onCancel }: ScanModalProps) {
+export function ScanModal({
+  scanning,
+  cancelling,
+  scanProgress,
+  scanEvents,
+  onCancel,
+}: ScanModalProps) {
   const scanListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,13 +37,15 @@ export function ScanModal({ scanning, scanProgress, scanEvents, onCancel }: Scan
       <Stack gap="sm">
         <Group justify="space-between" gap="xs">
           <Text size="sm">
-            {scanProgress
-              ? `Scanning CH ${scanProgress.channel} (${scanProgress.done}/${scanProgress.total})`
-              : 'Starting…'}
+            {cancelling
+              ? 'Cancelling scan and restoring channel…'
+              : scanProgress
+                ? `Scanning CH ${scanProgress.channel} (${scanProgress.done}/${scanProgress.total})`
+                : 'Starting…'}
           </Text>
         </Group>
         <Progress
-        color='white'
+          color="white"
           value={scanProgress ? (scanProgress.done / scanProgress.total) * 100 : 0}
           size="sm"
           aria-label="Scan progress"
@@ -62,7 +71,7 @@ export function ScanModal({ scanning, scanProgress, scanEvents, onCancel }: Scan
           </Stack>
         </ScrollArea>
         <Group justify="flex-end">
-          <Button color="dark" variant="white" onClick={onCancel}>
+          <Button color="dark" variant="white" onClick={onCancel} loading={cancelling}>
             Cancel scan
           </Button>
         </Group>
