@@ -88,6 +88,8 @@ export function useReceiverSession({
     [scan, channelEpg, epgNow],
   );
   const [transport, setTransport] = useState<TransportSnapshot>();
+  const [programs, setPrograms] = useState<TransportSnapshot['programs']>();
+  const programKeyRef = useRef<string | undefined>(undefined);
   const epgRef = useRef<EpgMap>({});
   const channelRef = useRef(channel);
   channelRef.current = channel;
@@ -119,6 +121,8 @@ export function useReceiverSession({
     setServices([]);
     setService(null);
     setTransport(undefined);
+    setPrograms(undefined);
+    programKeyRef.current = undefined;
     setStream(undefined);
     setB25(undefined);
     setDeviceLabel('');
@@ -189,6 +193,7 @@ export function useReceiverSession({
   }, [channel]);
 
   useEffect(() => {
+    let lastProgramPoll = 0;
     const timer = window.setInterval(() => {
       const current = sessionRef.current;
       if (current && !scanActiveRef.current) {
@@ -197,22 +202,36 @@ export function useReceiverSession({
           .then(() => {
             if (sessionRef.current !== current) return;
             setTransport(current.transport ? { ...current.transport } : undefined);
-            if (current.transport?.programs) {
-              const next = mergeEpg(epgRef.current, current.transport.programs);
-              if (JSON.stringify(next) !== JSON.stringify(epgRef.current)) {
-                epgRef.current = next;
-                epgDirty.current = true;
-                setChannelEpg((known) => ({ ...known, [channelRef.current]: next }));
-                if (Date.now() - lastEpgSave.current > 5000) {
-                  lastEpgSave.current = Date.now();
-                  void saveEpg(channelRef.current, next);
-                  epgDirty.current = false;
+            if (
+              current.transport?.programs &&
+              (programKeyRef.current === undefined || performance.now() - lastProgramPoll >= 2000)
+            ) {
+              lastProgramPoll = performance.now();
+              const key = JSON.stringify(current.transport.programs);
+              if (key !== programKeyRef.current) {
+                programKeyRef.current = key;
+                setPrograms(current.transport.programs);
+                const next = mergeEpg(epgRef.current, current.transport.programs);
+                if (JSON.stringify(next) !== JSON.stringify(epgRef.current)) {
+                  epgRef.current = next;
+                  epgDirty.current = true;
+                  setChannelEpg((known) => ({ ...known, [channelRef.current]: next }));
+                  if (Date.now() - lastEpgSave.current > 5000) {
+                    lastEpgSave.current = Date.now();
+                    void saveEpg(channelRef.current, next);
+                    epgDirty.current = false;
+                  }
                 }
               }
             }
             setStream(current.streamStats ? { ...current.streamStats } : undefined);
             const nextServices = current.transport?.services.map((item) => item.serviceId) ?? [];
-            setServices(nextServices);
+            setServices((previous) =>
+              previous.length === nextServices.length &&
+              previous.every((id, i) => id === nextServices[i])
+                ? previous
+                : nextServices,
+            );
             setService((selected) =>
               selected && nextServices.includes(Number(selected))
                 ? selected
@@ -342,6 +361,8 @@ export function useReceiverSession({
       return;
     }
     setChannel(value);
+    setPrograms(undefined);
+    programKeyRef.current = undefined;
     const session = sessionRef.current;
     if (!session || !connected || busy) return;
     setBusy(true);
@@ -417,6 +438,8 @@ export function useReceiverSession({
     setScanning(true);
     setBusy(true);
     setScanEvents([]);
+    setPrograms(undefined);
+    programKeyRef.current = undefined;
     setScanProgress({ done: 0, total: SCAN_CHANNELS.length, channel: SCAN_CHANNELS[0] });
     const priorChannel = channel;
     const seeded = scan;
@@ -544,12 +567,14 @@ export function useReceiverSession({
     service,
     services,
     channelOptions,
+    epgNow,
     epg: channelEpg[channel],
     scanning,
     scanCancelling,
     scanProgress,
     scanEvents,
     transport,
+    programs,
     stream,
     connected,
     deviceLabel,

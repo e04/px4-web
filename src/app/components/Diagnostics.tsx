@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Box, Paper, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import { timelineEvents, type EpgMap } from '../../epg';
@@ -12,6 +12,7 @@ interface ProgramInfoProps {
   programs: TransportSnapshot['programs'] | undefined;
   epg: EpgMap | undefined;
   current: ProgramEvent | null | undefined;
+  now: number;
 }
 
 const timelineClock = new Intl.DateTimeFormat('ja-JP', {
@@ -20,9 +21,14 @@ const timelineClock = new Intl.DateTimeFormat('ja-JP', {
   minute: '2-digit',
 });
 
-export function ProgramInfo({ service, programs, epg, current }: ProgramInfoProps) {
+export const ProgramInfo = memo(function ProgramInfo({
+  service,
+  programs,
+  epg,
+  current,
+  now,
+}: ProgramInfoProps) {
   const program = service ? programs?.[Number(service)] : undefined;
-  const now = Date.now();
   const firstHour = Math.floor(now / 3600000) * 3600000;
   const events = timelineEvents(
     [
@@ -179,7 +185,7 @@ export function ProgramInfo({ service, programs, epg, current }: ProgramInfoProp
       )}
     </Stack>
   );
-}
+});
 
 interface MetricsGridProps {
   stream: StreamStats | undefined;

@@ -39,10 +39,10 @@ export default function App() {
     refreshPlayback: playback.refreshPlayback,
   });
   const selectedProgram = session.service
-    ? session.transport?.programs[Number(session.service)]
+    ? session.programs?.[Number(session.service)]
     : undefined;
   const currentProgram = session.service
-    ? currentServiceProgram(selectedProgram?.current, session.epg, Number(session.service), Date.now())
+    ? currentServiceProgram(selectedProgram?.current, session.epg, Number(session.service), session.epgNow)
     : null;
   return (
     <Container fluid mih="100dvh" px={{ base: 'xs', sm: 'md' }} py="sm">
@@ -55,7 +55,7 @@ export default function App() {
           channelOptions={session.channelOptions}
           service={session.service}
           services={session.services}
-          programs={session.transport?.programs}
+          programs={session.programs}
           busy={busy}
           connected={session.connected}
           scanning={session.scanning}
@@ -112,9 +112,10 @@ export default function App() {
                 )}
               <ProgramInfo
                 service={session.service}
-                programs={session.transport?.programs}
+                programs={session.programs}
                 epg={session.epg}
                 current={currentProgram}
+                now={session.epgNow}
               />
               <MetricsGrid
                 stream={session.stream}
