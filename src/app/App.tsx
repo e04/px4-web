@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Alert, Anchor, Container, Grid, Group, Stack, Text } from '@mantine/core';
 import { ReceiverSession } from '../usb/receiver-session';
@@ -44,6 +44,11 @@ export default function App() {
   const currentProgram = session.service
     ? currentServiceProgram(selectedProgram?.current, session.epg, Number(session.service), session.epgNow)
     : null;
+  useEffect(() => {
+    const stationName = selectedProgram?.stationName ?? '';
+    const programTitle = currentProgram?.title ?? '';
+    document.title = [stationName, programTitle].filter(Boolean).join(' ') || 'px4-web';
+  }, [selectedProgram?.stationName, currentProgram?.title]);
   return (
     <Container fluid mih="100dvh" px={{ base: 'xs', sm: 'md' }} py="sm">
       <Stack maw={1440} mih="calc(100dvh - var(--mantine-spacing-md))" mx="auto" gap="xs">
