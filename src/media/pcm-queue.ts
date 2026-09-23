@@ -21,9 +21,12 @@ export class PcmQueue {
     if (samples.length % 2 || !Number.isFinite(pts)) throw new Error('Invalid PCM');
     const expected =
       this.startPts === undefined ? pts : this.startPts + (this.count * 90000) / 48000;
-    const gap = Math.round(((pts - expected) * 48000) / 90000);
+    let gap = Math.round(((pts - expected) * 48000) / 90000);
     // Large jumps must rebuild the timeline, never play old audio across them.
-    if (Math.abs(gap) > 12000) this.clear();
+    if (Math.abs(gap) > 12000 || (!this.count && Math.abs(gap) > 96)) {
+      this.clear();
+      gap = 0;
+    }
     this.startPts ??= pts;
     const silence = this.count && gap > 96 && gap <= 12000 ? gap : 0;
     const skip = gap < -96 && gap >= -12000 ? Math.min(-gap, samples.length / 2) : 0;

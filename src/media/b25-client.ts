@@ -44,10 +44,10 @@ export class B25Worker {
       if (data.type === 'apdu') {
         void this.apdu(new Uint8Array(data.bytes)).then(
           (bytes) => {
-            if (!this.closed)
-              this.worker.postMessage({ type: 'apdu', id: data.id, bytes: bytes.buffer }, [
-                bytes.buffer,
-              ]);
+            if (!this.closed) {
+              const response = bytes.slice().buffer;
+              this.worker.postMessage({ type: 'apdu', id: data.id, bytes: response }, [response]);
+            }
           },
           (error) => {
             if (!this.closed)

@@ -45,6 +45,19 @@ it('discards late card responses and rejects queued operations when closed', asy
   await Promise.resolve();
   expect(MockWorker.current.postMessage).toHaveBeenCalledTimes(1);
 });
+it('transfers only the APDU response view', async () => {
+  vi.stubGlobal('Worker', MockWorker);
+  const client = new B25Worker(async () => new Uint8Array([1, 0x90, 0, 2]).subarray(1, 3));
+  const opening = client.request('open', { serviceId: 1 });
+  const assertion = expect(opening).rejects.toThrow('closed');
+  MockWorker.current.reply({ type: 'apdu', id: 1, bytes: new ArrayBuffer(5) });
+  await Promise.resolve();
+  const [response, transfer] = MockWorker.current.postMessage.mock.lastCall!;
+  expect(new Uint8Array(response.bytes)).toEqual(new Uint8Array([0x90, 0]));
+  expect(transfer).toEqual([response.bytes]);
+  client.close();
+  await assertion;
+});
 it('terminates an unresponsive Worker rather than permitting stale queued responses', async () => {
   vi.useFakeTimers();
   vi.stubGlobal('Worker', MockWorker);

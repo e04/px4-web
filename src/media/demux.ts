@@ -32,7 +32,7 @@ export class PlaybackDemux {
   readonly psi = new Psi();
   readonly stats = { packets: 0, ccErrors: 0, scrambled: 0, resets: 0, pcr: 0, pes: 0 };
   private tail = new Uint8Array(0);
-  private cc = new Map<number, number>();
+  private cc = new Map<number, Uint8Array>();
   private assemblies = new Map<number, Assembly>();
   private video?: number;
   private audio?: number;
@@ -115,14 +115,14 @@ export class PlaybackDemux {
     if (!(afc & 1) || offset >= 188) return;
     const cc = p[3] & 15,
       previous = this.cc.get(pid);
-    if (cc === previous) return;
-    if (previous !== undefined && cc !== ((previous + 1) & 15)) {
+    if (previous && cc === (previous[3] & 15) && p.every((byte, i) => byte === previous[i])) return;
+    if (previous && cc !== ((previous[3] + 1) & 15)) {
       this.stats.ccErrors++;
       this.psi.resetPid(pid);
       if (selected) this.discontinuity();
       else if (captioned) this.clearCaption(pid);
     }
-    this.cc.set(pid, cc);
+    this.cc.set(pid, p.slice());
     const payload = p.subarray(offset);
     this.psi.push(pid, payload, start);
     const updated = this.psi.services.find((s) => s.serviceId === this.serviceId);

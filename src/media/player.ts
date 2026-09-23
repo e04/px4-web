@@ -117,9 +117,18 @@ export class FullSegPlayer {
         this.audio?.port.postMessage({ type: 'reset', generation: this.generation });
         this.onCaptionReset?.();
       } else if (data.type === 'caption') {
-        this.onCaption?.({ kind: data.kind, bytes: data.bytes, pts: data.pts, dts: data.dts });
+        this.onCaption?.({
+          kind: data.kind,
+          bytes: new Uint8Array(data.bytes),
+          pts: data.pts,
+          dts: data.dts,
+        });
       } else if (data.type === 'video') {
-        this.worker.postMessage({ type: 'release', video: 1, videoBytes: data.picture.bytes.byteLength });
+        this.worker.postMessage({
+          type: 'release',
+          video: 1,
+          videoBytes: data.picture.bytes.byteLength,
+        });
         this.pictures.push(data.picture);
         this.pictureBytes += data.picture.bytes.byteLength;
         this.pictures.sort((a, b) => a.pts - b.pts);

@@ -64,6 +64,30 @@ describe('broadcast timestamps and PES', () => {
     damaged[3] |= 128;
     expect(() => d.push(damaged)).toThrow(/scrambled/);
   });
+  it('ignores exact TS duplicates but resets when the same CC carries different bytes', () => {
+    const input = fixture();
+    let resets = 0;
+    const d = new PlaybackDemux(
+      1,
+      () => {},
+      () => resets++,
+    );
+    for (let i = 0; i < input.length; i += 188) {
+      const packet = input.slice(i, i + 188);
+      d.push(packet);
+      if (d.stats.pes > 4 && (packet[1] & 31) === 1 && packet[2] === 0 && packet[3] & 16) {
+        d.push(packet.slice());
+        expect(d.stats.ccErrors).toBe(0);
+        const changed = packet.slice();
+        changed[187] ^= 1;
+        d.push(changed);
+        expect(d.stats.ccErrors).toBe(1);
+        expect(resets).toBeGreaterThan(1);
+        return;
+      }
+    }
+    throw new Error('Video packet not found');
+  });
   it('rejects absent services and truncated input', () => {
     const d = new PlaybackDemux(
       999,
@@ -113,6 +137,16 @@ describe('AudioWorklet PCM queue', () => {
     queue.clear();
     expect(queue.frames).toBe(0);
     expect(queue.pts).toBeUndefined();
+  });
+  it('uses the new PTS when audio resumes after an empty queue', () => {
+    const queue = new PcmQueue();
+    queue.push(new Float32Array(7200 * 2), 90000);
+    const left = new Float32Array(128),
+      right = new Float32Array(128);
+    for (let i = 0; i < 57; i++) queue.render(left, right);
+    expect(queue.frames).toBe(0);
+    queue.push(new Float32Array(7200 * 2), 90000 + 7200 * (90000 / 48000) + 9000);
+    expect(queue.pts).toBe(90000 + 7200 * (90000 / 48000) + 9000);
   });
 });
 

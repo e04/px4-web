@@ -228,12 +228,13 @@ describe('player caption forwarding', () => {
     MockWorker.current.reply({
       type: 'caption',
       kind: 'super',
-      bytes: new Uint8Array([0x81, 1, 2]),
+      bytes: new Uint8Array([0x81, 1, 2]).buffer,
       pts: 9000,
       dts: 9000,
     });
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ kind: 'super', pts: 9000, dts: 9000 });
+    expect(seen[0].bytes).toEqual(new Uint8Array([0x81, 1, 2]));
     MockWorker.current.reply({ type: 'reset' });
     expect(resetCalls).toBe(1);
     player.close();
