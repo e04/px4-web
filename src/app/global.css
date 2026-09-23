@@ -20,6 +20,20 @@ body {
   display: none;
 }
 
+.program-schedule {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mantine-color-dark-4) transparent;
+}
+
+.program-schedule::-webkit-scrollbar {
+  height: 5px;
+}
+
+.program-schedule::-webkit-scrollbar-thumb {
+  background: var(--mantine-color-dark-4);
+  border-radius: 5px;
+}
+
 .television-canvas {
   display: block;
   width: 100%;

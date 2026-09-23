@@ -114,6 +114,78 @@ describe('scan persistence and labels', () => {
 });
 
 describe('scanChannels', () => {
+  it('waits up to 10 seconds by default for a locked channel without a station name', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = fakeSession({
+        13: { locked: true, services: [{ serviceId: 1, stationName: '' }] },
+      });
+      const scan = scanChannels(session, { channels: [13] });
+      const onProgress = vi.fn();
+      void scan.then(onProgress);
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(onProgress).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await scan)['13']).toMatchObject({ locked: true });
+      expect(onProgress).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for station names even when present and following EIT are already available', async () => {
+    const session = fakeSession({
+      13: { locked: true, services: [{ serviceId: 1, stationName: '' }] },
+    });
+    const refresh = session.refreshTransport.bind(session);
+    const event = { id: 1, title: 'Now', description: '', start: 100, end: 200 };
+    let calls = 0;
+    session.refreshTransport = async () => {
+      await refresh();
+      calls++;
+      session.transport!.programs![1] = {
+        stationName: calls >= 2 ? 'Station A' : '',
+        current: event,
+        next: { ...event, id: 2 },
+      };
+    };
+    const result = await scanChannels(session, {
+      channels: [13],
+      siSettleMs: 5000,
+      pollMs: 0,
+    });
+    expect(calls).toBe(2);
+    expect(result['13']?.services).toEqual([{ serviceId: 1, stationName: 'Station A' }]);
+  });
+
+  it('stops on hardware errors instead of marking remaining channels unreceivable', async () => {
+    const session = fakeSession({ 13: { locked: true, services: [] } });
+    session.retune = async () => {
+      throw new Error('Reconnection required');
+    };
+    const seen: number[] = [];
+    await expect(
+      scanChannels(session, {
+        channels: [13, 14, 15],
+        siSettleMs: 0,
+        onProgress: (channel) => seen.push(channel),
+      }),
+    ).rejects.toThrow('Reconnection required');
+    expect(seen).toEqual([13]);
+  });
+
+  it('stops scanning if SI reception fails after locking', async () => {
+    const session = fakeSession({ 13: { locked: true } });
+    session.refreshTransport = async () => {
+      throw new Error('TS Worker closed');
+    };
+    const onProgress = vi.fn();
+    await expect(scanChannels(session, { channels: [13, 14], onProgress })).rejects.toThrow(
+      'TS Worker closed',
+    );
+    expect(onProgress).not.toHaveBeenCalled();
+  });
+
   it('moves on once every discovered service has present and following EIT', async () => {
     const session = fakeSession({
       13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] },

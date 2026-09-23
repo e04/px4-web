@@ -144,7 +144,7 @@ export async function scanChannels(
 ): Promise<ScanMap> {
   const channels = options.channels ?? SCAN_CHANNELS;
   const tuneTimeoutMs = options.tuneTimeoutMs ?? 2000;
-  const siSettleMs = options.siSettleMs ?? 5000;
+  const siSettleMs = options.siSettleMs ?? 10000;
   const pollMs = options.pollMs ?? 250;
   const result: ScanMap = {};
   let streaming = !!session.receiving;
@@ -158,75 +158,61 @@ export async function scanChannels(
     const channel = channels[index]!;
     const done = index + 1;
     aborted(options);
-    try {
-      if (!streaming) {
-        const tuned = await session.receiver.tune(channel, tuneTimeoutMs);
+    if (!streaming) {
+      const tuned = await session.receiver.tune(channel, tuneTimeoutMs);
+      aborted(options);
+      if (!tuned.demodLocked) {
+        record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
+        continue;
+      }
+      await session.startCapture();
+      aborted(options);
+      streaming = true;
+    } else {
+      try {
+        const tuned = await session.retune(channel);
         aborted(options);
         if (!tuned.demodLocked) {
           record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
           continue;
         }
-        await session.startCapture();
+      } catch (error) {
         aborted(options);
-        streaming = true;
-      } else {
-        try {
-          const tuned = await session.retune(channel);
-          aborted(options);
-          if (!tuned.demodLocked) {
-            record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
-            continue;
-          }
-        } catch (error) {
-          aborted(options);
-          if (error instanceof Error && /could not be locked/i.test(error.message)) {
-            record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
-            continue;
-          }
-          throw error;
+        if (error instanceof Error && /could not be locked/i.test(error.message)) {
+          record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
+          continue;
         }
-        aborted(options);
+        throw error;
       }
-    } catch (error) {
       aborted(options);
-      // A dead receiver rejects fast (`Reconnection required`), so keep
-      // marching and let the caller surface the fatal state on restore.
-      void error;
-      record(channel, { locked: false, services: [], scannedAt: Date.now() }, done);
-      continue;
     }
 
     let services: ScannedService[] = [];
-    try {
-      const deadline = Date.now() + siSettleMs;
-      for (;;) {
-        aborted(options);
-        await session.refreshTransport();
-        aborted(options);
-        const transport = session.transport;
-        const current = (transport?.services ?? []).map((service) => ({
-          serviceId: service.serviceId,
-          stationName: transport?.programs?.[service.serviceId]?.stationName?.trim() ?? '',
-        }));
-        if (
-          current.length > services.length ||
-          (current.length > 0 && current.every((service) => service.stationName))
-        )
-          services = current;
-        if (
-          current.length > 0 &&
-          current.every((service) => {
-            const program = transport?.programs?.[service.serviceId];
-            return program?.current && program?.next;
-          })
-        )
-          break;
-        if (Date.now() >= deadline) break;
-        await delay(pollMs, options.signal);
-      }
-    } catch {
+    const deadline = Date.now() + siSettleMs;
+    for (;;) {
       aborted(options);
-      // Keep the lock with whatever was collected so far.
+      await session.refreshTransport();
+      aborted(options);
+      const transport = session.transport;
+      const current = (transport?.services ?? []).map((service) => ({
+        serviceId: service.serviceId,
+        stationName: transport?.programs?.[service.serviceId]?.stationName?.trim() ?? '',
+      }));
+      if (
+        current.length > services.length ||
+        (current.length > 0 && current.every((service) => service.stationName))
+      )
+        services = current;
+      if (
+        current.length > 0 &&
+        current.every((service) => {
+          const program = transport?.programs?.[service.serviceId];
+          return service.stationName && program?.current && program?.next;
+        })
+      )
+        break;
+      if (Date.now() >= deadline) break;
+      await delay(pollMs, options.signal);
     }
     if (session.transport?.programs)
       await options.onPrograms?.(channel, session.transport.programs);

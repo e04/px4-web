@@ -2,12 +2,38 @@ import type { ProgramEvent, ProgramInfo } from './transport/program-info';
 import { epgStore, loadValue, saveValue } from './storage';
 
 export type EpgMap = Record<number, ProgramEvent[]>;
+export function timelineEvents(events: (ProgramEvent | null)[], now: number, start = now) {
+  const end = start + 24 * 3600000;
+  const unique = new Map<string, ProgramEvent>();
+  for (const event of events)
+    if (
+      event?.start != null &&
+      event.end != null &&
+      event.end > now &&
+      event.start < end &&
+      event.end > event.start
+    )
+      if (event.title || !unique.get(`${event.id}:${event.start}`)?.title)
+        unique.set(`${event.id}:${event.start}`, event);
+  return [...unique.values()]
+    .sort((a, b) => a.start! - b.start!)
+    .map((event) => ({
+      event,
+      left: (Math.max(event.start!, start) - start) / 36000,
+      width: (Math.min(event.end!, end) - Math.max(event.start!, start)) / 36000,
+    }));
+}
 export function currentChannelProgram(epg: EpgMap | undefined, serviceIds: number[], now: number): ProgramEvent | undefined {
   for (const id of serviceIds) {
     const match = epg?.[id]?.find((event) => event.start != null && event.start <= now && event.end != null && now < event.end && event.title);
     if (match) return match;
   }
   return undefined;
+}
+export function currentServiceProgram(live: ProgramEvent | null | undefined, epg: EpgMap | undefined, serviceId: number, now: number) {
+  return live?.title && (live.start == null || live.start <= now) && (live.end == null || live.end > now)
+    ? live
+    : currentChannelProgram(epg, [serviceId], now);
 }
 const key = (channel: string) => `channel:${channel}`;
 
@@ -24,8 +50,10 @@ export function mergeEpg(existing: EpgMap, programs: Record<number, ProgramInfo>
   for (const [id, program] of Object.entries(programs)) {
     const events = new Map<string, ProgramEvent>();
     for (const event of [...(existing[Number(id)] ?? []), ...program.future, program.current, program.next]) {
-      if (validEvent(event) && event.end! > now)
-        events.set(`${event.id}:${event.start}`, event);
+      if (validEvent(event) && event.end! > now) {
+        const id = `${event.id}:${event.start}`;
+        if (event.title || !events.get(id)?.title) events.set(id, event);
+      }
     }
     if (events.size) result[Number(id)] = [...events.values()].sort((a, b) => a.start! - b.start!);
   }

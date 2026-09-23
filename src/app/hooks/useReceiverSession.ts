@@ -253,6 +253,8 @@ export function useReceiverSession({
     const label = stateLabels[event.state] ?? event.state;
     setStatus(label);
     addLog(label, event.state === 'error' || event.state === 'disconnected');
+    if (event.state === 'disconnected' && sessionRef.current?.receiver.state === 'disconnected')
+      void closeSession().catch((error) => addLog(String(error), true));
     if (
       ['stopping', 'stopped', 'error', 'disconnected', 'tuning', 'initializing'].includes(
         event.state,
@@ -542,6 +544,7 @@ export function useReceiverSession({
     service,
     services,
     channelOptions,
+    epg: channelEpg[channel],
     scanning,
     scanCancelling,
     scanProgress,

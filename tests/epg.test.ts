@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentChannelProgram, mergeEpg } from '../src/epg';
+import { currentChannelProgram, currentServiceProgram, mergeEpg, timelineEvents } from '../src/epg';
 import type { ProgramEvent, ProgramInfo } from '../src/transport/program-info';
 
 describe('EPG merge', () => {
@@ -19,5 +19,32 @@ describe('EPG merge', () => {
       10: [{ ...event, title: 'Updated' }, program.future[1]],
       11: [{ ...event, id: 3 }],
     });
+  });
+  it('keeps the known current title while live EIT temporarily lacks it', () => {
+    const event: ProgramEvent = { id: 1, title: 'On air', description: '', start: 100, end: 200 };
+    const blank = { ...event, title: '' };
+    const epg = { 10: [event] };
+    expect(currentServiceProgram(null, epg, 10, 150)).toEqual(event);
+    expect(currentServiceProgram(blank, epg, 10, 150)).toEqual(event);
+    expect(currentServiceProgram(null, epg, 10, 200)).toBeUndefined();
+    expect(mergeEpg(epg, { 10: { serviceId: 10, stationName: '', current: blank, next: null, future: [] } }, 150)[10]).toEqual([event]);
+  });
+});
+
+describe('24-hour program timeline', () => {
+  it('positions programs at 100px/hour, clips the window, and deduplicates live EIT', () => {
+    const hour = 3600000;
+    const event: ProgramEvent = { id: 1, title: 'Now', description: '', start: -hour, end: hour };
+    const later: ProgramEvent = {
+      id: 2, title: 'Later', description: '', start: 2 * hour, end: 25 * hour,
+    };
+    expect(timelineEvents([event, later, { ...event, title: 'Updated' }, { ...event, title: '' }, null], 0)).toEqual([
+      { event: { ...event, title: 'Updated' }, left: 0, width: 100 },
+      { event: later, left: 200, width: 2200 },
+    ]);
+    expect(timelineEvents([event, later], hour / 2, 0)).toEqual([
+      { event, left: 0, width: 100 },
+      { event: later, left: 200, width: 2200 },
+    ]);
   });
 });

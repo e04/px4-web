@@ -9,7 +9,7 @@ import { ScanModal } from './components/ScanModal';
 import { VideoStage } from './components/VideoStage';
 import { PipControls } from './components/PipControls';
 import { LogPanel, MetricsGrid, ProgramInfo } from './components/Diagnostics';
-import { active } from './format';
+import { currentServiceProgram } from '../epg';
 
 export default function App() {
   // Shared UI state owned here; domain state lives in the hooks below.
@@ -41,7 +41,9 @@ export default function App() {
   const selectedProgram = session.service
     ? session.transport?.programs[Number(session.service)]
     : undefined;
-  const currentProgram = active(selectedProgram?.current, Date.now());
+  const currentProgram = session.service
+    ? currentServiceProgram(selectedProgram?.current, session.epg, Number(session.service), Date.now())
+    : null;
   return (
     <Container fluid mih="100dvh" px={{ base: 'xs', sm: 'md' }} py="sm">
       <Stack maw={1440} mih="calc(100dvh - var(--mantine-spacing-md))" mx="auto" gap="xs">
@@ -108,7 +110,12 @@ export default function App() {
                   />,
                   playback.pipControlsHost,
                 )}
-              <ProgramInfo service={session.service} programs={session.transport?.programs} />
+              <ProgramInfo
+                service={session.service}
+                programs={session.transport?.programs}
+                epg={session.epg}
+                current={currentProgram}
+              />
               <MetricsGrid
                 stream={session.stream}
                 transport={session.transport}
