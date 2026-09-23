@@ -74,6 +74,7 @@ export class T1Card {
   private receiveSequence = 0;
   private generation = 0;
   private busy = false;
+  private pending = new Uint8Array();
   constructor(private readonly io: CardIo) {}
   async checkPresence(): Promise<void> {
     const generation = this.generation;
@@ -87,6 +88,7 @@ export class T1Card {
     this.generation++;
     this.atr = undefined;
     this.sendSequence = this.receiveSequence = 0;
+    this.pending = new Uint8Array();
   }
   private check(generation: number, deadline: number): void {
     if (generation !== this.generation) throw new Error('Card session invalidated');
@@ -97,7 +99,8 @@ export class T1Card {
     while (true) {
       this.check(generation, deadline);
       if (!(await this.io.present())) throw new Error('Card removed');
-      const part = await this.io.read();
+      const part = this.pending.length ? this.pending : await this.io.read();
+      this.pending = new Uint8Array();
       this.check(generation, deadline);
       bytes.push(...part);
       const a = new Uint8Array(bytes);
@@ -107,14 +110,7 @@ export class T1Card {
         const length = 3 + a[2] + (this.parameters.crc ? 2 : 1);
         if (length > 255) throw new Error('T=1 frame overflow');
         if (a.length >= length) {
-          // Late duplicate responses can share a UART read. Drain bounded residual data.
-          if (a.length > length || part.length === 255) {
-            for (let i = 0; i < 4; i++) {
-              this.check(generation, deadline);
-              if (!(await this.io.read()).length) break;
-              if (i === 3) throw new Error('UART residual overflow');
-            }
-          }
+          this.pending = a.slice(length);
           const f = a.slice(0, length);
           if (f[0]) throw new Error('T=1 NAD');
           const expected = frame(f[1], f.slice(3, 3 + f[2]), this.parameters.crc);

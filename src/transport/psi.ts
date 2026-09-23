@@ -160,12 +160,14 @@ export class Psi {
         const next = offset + 5 + (((bytes[offset + 3] & 15) << 8) | bytes[offset + 4]);
         if (next > end) break;
         let componentTag: number | undefined;
-        for (let d = offset + 5; d + 2 <= next;) {
+        let d = offset + 5;
+        for (; d + 2 <= next;) {
           const len = bytes[d + 1];
           if (d + 2 + len > next) break;
           if (bytes[d] === 0x52 && len >= 1) componentTag = bytes[d + 2];
           d += 2 + len;
         }
+        if (d !== next) break;
         streams.push({
           streamType: bytes[offset],
           pid: ((bytes[offset + 1] & 31) << 8) | bytes[offset + 2],

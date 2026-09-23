@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TaggedTs } from '../src/transport/tagged-ts';
 import { TsAnalyzer } from '../src/transport/analyzer';
 import { mpegCrc32, Psi } from '../src/transport/psi';
 import { TsPipeline } from '../src/transport/pipeline';
 import { TsCapture } from '../src/transport/capture';
+import { TransportWorker } from '../src/transport/worker-client';
 
 function join(...chunks: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(chunks.reduce((n, b) => n + b.length, 0));
@@ -215,6 +216,55 @@ describe('PAT/PMT sections', () => {
     a.push(complete);
     expect(a.psi.services[0].serviceId).toBe(1);
   });
+  it('rejects a PMT with a truncated stream descriptor', () => {
+    const psi = new Psi();
+    psi.push(0, start(pat()), true);
+    psi.push(
+      256,
+      start(section(2, 1, [0xe1, 1, 0xf0, 0, 2, 0xe1, 1, 0xf0, 3, 0x52, 2, 0x30])),
+      true,
+    );
+    expect(psi.services[0].streams).toBeUndefined();
+    expect(psi.malformedSections).toBe(1);
+  });
+});
+
+it('waits for B25 forwarding before accepting the next TS chunk', async () => {
+  let release!: () => void;
+  vi.stubGlobal(
+    'Worker',
+    class {
+      onmessage?: (event: MessageEvent) => void;
+      postMessage({ id, type }: { id: number; type: string }) {
+        queueMicrotask(() => {
+          if (type === 'chunk')
+            this.onmessage?.({ data: { type: 'ts', bytes: new ArrayBuffer(188) } } as MessageEvent);
+          this.onmessage?.({ data: { id } } as MessageEvent);
+        });
+      }
+      terminate() {}
+    },
+  );
+  try {
+    const worker = new TransportWorker(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    let done = false;
+    const chunk = worker.request('chunk', new ArrayBuffer(188)).then(() => {
+      done = true;
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(done).toBe(false);
+    release();
+    await chunk;
+    expect(done).toBe(true);
+    worker.close();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 describe('bounded capture and long-running pipeline', () => {

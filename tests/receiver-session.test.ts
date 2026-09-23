@@ -83,7 +83,16 @@ function usb() {
       removeEventListener: vi.fn(),
     },
   });
-  return { device, pending, unplug: () => disconnect({ device } as unknown as USBConnectionEvent) };
+  return {
+    device,
+    pending,
+    settle: () => {
+      const count = pending.length;
+      for (let i = 0; i < count; i++)
+        pending[i]({ status: 'ok', data: new DataView(new ArrayBuffer(0)) });
+    },
+    unplug: () => disconnect({ device } as unknown as USBConnectionEvent),
+  };
 }
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => {
@@ -133,7 +142,7 @@ it('rejects B25 on the card-less side of a Q model', async () => {
 });
 
 it('retunes on the same USB session without reconnecting, and rejects reuse after close', async () => {
-  const { device, pending } = usb();
+  const { device, pending, settle } = usb();
   const session = await ReceiverSession.connect(
     () => {},
     () => {},
@@ -151,12 +160,20 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
   expect(device.transferIn.mock.calls[0]).toEqual([4, 188 * 816]);
   expect(pending).toHaveLength(4);
   expect(session.receiver.state).toBe('streaming');
-  vi.spyOn(session.receiver, 'tune').mockResolvedValue({ demodLocked: true } as never);
-  await session.retune(26);
+  vi.spyOn(session.receiver, 'tune').mockImplementation(async () => {
+    session.receiver.state = 'locked';
+    return { demodLocked: true } as never;
+  });
+  const retune = session.retune(26);
+  expect(session.receiver.tune).not.toHaveBeenCalled();
+  settle();
+  await retune;
   expect(session.receiver.tune).toHaveBeenCalledWith(26);
   expect(device.close).not.toHaveBeenCalled();
   expect(mocks.workerClose).toHaveBeenCalledTimes(1);
   expect(pending).toHaveLength(8);
+  expect(mocks.mask).toHaveBeenCalledTimes(4);
+  expect(session.receiver.state).toBe('streaming');
   await session.close();
   await session.close();
   expect(device.close).toHaveBeenCalledTimes(1);
@@ -168,7 +185,7 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
 });
 
 it('retune propagates a lock failure without reconnecting the device', async () => {
-  const { device } = usb();
+  const { device, settle } = usb();
   const session = await ReceiverSession.connect(
     () => {},
     () => {},
@@ -179,13 +196,35 @@ it('retune propagates a lock failure without reconnecting the device', async () 
     demodLocked: false,
     timeout: 'demod',
   } as never);
-  await expect(session.retune(27)).rejects.toThrow('could not be locked');
+  const retune = session.retune(27);
+  settle();
+  await expect(retune).rejects.toThrow('could not be locked');
   expect(device.close).not.toHaveBeenCalled();
   await session.close();
 });
 
+it('enables TS pins when retuning from ready before any capture', async () => {
+  const { device } = usb();
+  const session = await ReceiverSession.connect(
+    () => {},
+    () => {},
+  );
+  session.receiver.state = 'ready';
+  vi.spyOn(session.receiver, 'tune').mockImplementation(async () => {
+    session.receiver.state = 'locked';
+    return { demodLocked: true } as never;
+  });
+  await session.retune(26);
+  expect(mocks.i2cWrite).toHaveBeenCalledWith(0x10, new Uint8Array([0x1d, 0]));
+  expect(mocks.i2cWrite.mock.invocationCallOrder[0]).toBeLessThan(
+    device.transferIn.mock.invocationCallOrder[0],
+  );
+  expect(session.receiver.state).toBe('streaming');
+  await session.close();
+});
+
 it('ignores an old B25 snapshot failure after retuning and allows playback to restart', async () => {
-  usb();
+  const { settle } = usb();
   const session = await ReceiverSession.connect(
     () => {},
     () => {},
@@ -207,8 +246,13 @@ it('ignores an old B25 snapshot failure after retuning and allows playback to re
   );
   const refresh = session.refreshTransport();
   await vi.waitFor(() => expect(rejectSnapshot).toBeTypeOf('function'));
-  vi.spyOn(session.receiver, 'tune').mockResolvedValue({ demodLocked: true } as never);
-  await session.retune(26);
+  vi.spyOn(session.receiver, 'tune').mockImplementation(async () => {
+    session.receiver.state = 'locked';
+    return { demodLocked: true } as never;
+  });
+  const retune = session.retune(26);
+  settle();
+  await retune;
   await session.startB25(1032, true);
   const current = session.b25;
   rejectSnapshot(new Error('B25 session closed'));
@@ -246,7 +290,43 @@ it('reopens the card on playback retry after a current B25 failure', async () =>
   await session.close();
 });
 
-it('keeps the device open when streaming IN times out so another channel can be picked', async () => {
+it('does not attach an old B25 open to a new channel or invalidate its card', async () => {
+  const { settle } = usb();
+  const session = await ReceiverSession.connect(
+    () => {},
+    () => {},
+  );
+  session.receiver.state = 'locked';
+  await session.startCapture();
+  const card = new T1Card({} as never);
+  card.atr = new Uint8Array([1]);
+  const invalidate = vi.spyOn(card, 'invalidate');
+  session.card = card;
+  let finishOpen!: () => void;
+  mocks.b25Request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOpen = () => resolve({ snapshot: undefined });
+      }),
+  );
+  const opening = session.startB25(1032, true);
+  await vi.waitFor(() => expect(finishOpen).toBeTypeOf('function'));
+  vi.spyOn(session.receiver, 'tune').mockImplementation(async () => {
+    session.receiver.state = 'locked';
+    return { demodLocked: true } as never;
+  });
+  const retune = session.retune(26);
+  settle();
+  await retune;
+  finishOpen();
+  await expect(opening).rejects.toThrow('superseded');
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(session.b25).toBeUndefined();
+  await session.startB25(1032, true);
+  await session.close();
+});
+
+it('requires reconnection if a timed-out Bulk IN is still pending', async () => {
   vi.useFakeTimers();
   const { device, pending } = usb();
   const session = await ReceiverSession.connect(
@@ -260,17 +340,23 @@ it('keeps the device open when streaming IN times out so another channel can be 
   expect(session.streamError).toContain('timeout');
   expect(session.receiver.state).toBe('streaming');
   expect(device.opened).toBe(true);
-  // Manual reselection works without reconnecting.
+  expect(session.receiving).toBe(false);
+  await expect(session.startB25(1032, true)).rejects.toThrow('Start TS reception');
+  await expect(session.recordTs()).rejects.toThrow('Start TS reception');
+  // A WebUSB timeout does not cancel the physical transfer.
   vi.spyOn(session.receiver, 'tune').mockResolvedValue({ demodLocked: true } as never);
-  await session.retune(26);
-  expect(session.receiver.tune).toHaveBeenCalledWith(26);
-  expect(device.close).not.toHaveBeenCalled();
+  const retune = session.retune(26);
+  const assertion = expect(retune).rejects.toThrow('reconnect required');
+  await vi.advanceTimersByTimeAsync(5000);
+  await assertion;
+  expect(session.receiver.tune).not.toHaveBeenCalled();
+  expect(device.close).toHaveBeenCalledOnce();
   expect(pending.length).toBeGreaterThan(0);
   await session.close();
 });
 
 it('retune can be retried after a lock failure without reconnecting', async () => {
-  const { device } = usb();
+  const { device, settle } = usb();
   const session = await ReceiverSession.connect(
     () => {},
     () => {},
@@ -279,9 +365,17 @@ it('retune can be retried after a lock failure without reconnecting', async () =
   await session.startCapture();
   const tune = vi
     .spyOn(session.receiver, 'tune')
-    .mockResolvedValueOnce({ demodLocked: false, timeout: 'demod' } as never)
-    .mockResolvedValue({ demodLocked: true } as never);
-  await expect(session.retune(27)).rejects.toThrow('could not be locked');
+    .mockImplementationOnce(async () => {
+      session.receiver.state = 'ready';
+      return { demodLocked: false, timeout: 'demod' } as never;
+    })
+    .mockImplementation(async () => {
+      session.receiver.state = 'locked';
+      return { demodLocked: true } as never;
+    });
+  const first = session.retune(27);
+  settle();
+  await expect(first).rejects.toThrow('could not be locked');
   expect(device.close).not.toHaveBeenCalled();
   await session.retune(28);
   expect(tune).toHaveBeenCalledTimes(2);
@@ -321,7 +415,10 @@ it('stopping during stream reset invalidates start before TS pins can be enabled
   const { device } = usb();
   let resolveReset!: () => void;
   mocks.mask.mockImplementationOnce(
-    () => new Promise((resolve) => { resolveReset = resolve; }),
+    () =>
+      new Promise((resolve) => {
+        resolveReset = resolve;
+      }),
   );
   const session = await ReceiverSession.connect(
     () => {},

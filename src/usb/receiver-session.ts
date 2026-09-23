@@ -27,7 +27,7 @@ export class ReceiverSession {
   savedTs?: Blob;
   streamError?: string;
   get receiving(): boolean {
-    return !!this.stream && !this.closing;
+    return !!this.stream?.running && !this.closing;
   }
   get streamStats() {
     return this.stream?.snapshot();
@@ -113,7 +113,16 @@ export class ReceiverSession {
     if (this.closing || !['ready', 'locked', 'streaming'].includes(this.receiver.state))
       throw new Error('Switch channels while receiving TS');
     const epoch = ++this.epoch;
-    this.stream?.stop();
+    const previous = this.stream;
+    previous?.stop();
+    try {
+      await previous?.drain();
+    } catch (error) {
+      await this.close().catch(() => {});
+      throw error;
+    }
+    if (this.closing || epoch !== this.epoch)
+      throw new Error('Channel switch was superseded by a newer operation');
     this.stream = undefined;
     // The card session is reused; only the multiplex-bound B25 filter is rebuilt by startB25.
     this.b25?.close();
@@ -126,6 +135,9 @@ export class ReceiverSession {
     if (this.closing || epoch !== this.epoch)
       throw new Error('Channel switch was superseded by a newer operation');
     if (!result.demodLocked) throw new Error('The channel could not be locked.');
+    await this.receiver.startCapture();
+    if (this.closing || epoch !== this.epoch)
+      throw new Error('Channel switch was superseded by a newer operation');
     const { stream, worker } = this.wireStream(epoch);
     this.serveStream(epoch, stream, worker);
     return result;
@@ -136,7 +148,7 @@ export class ReceiverSession {
     const worker = (this.worker = new TransportWorker((bytes) => {
       const b25 = this.closing || epoch !== this.epoch ? undefined : this.b25;
       if (b25 && !this.fileDecoding && !this.b25Error)
-        void b25.push(bytes).catch((error) => {
+        return b25.push(bytes).catch((error) => {
           if (this.b25 === b25) this.failB25(error);
         });
     }));
@@ -153,17 +165,23 @@ export class ReceiverSession {
       .catch((error) => {
         if (epoch !== this.epoch) return;
         this.streamError = String(error);
-        // ponytail: keep the USB device open for manual channel reselection.
-        // WebUSB has no abortable transferIn, so the timed-out Bulk IN stays
-        // pending; it is ignored via epoch and bounded to STREAM_TRANSFERS.
+        // WebUSB has no abortable transferIn; drain() requires the physical
+        // request to settle before another tune, or closes the session.
         stream.stop();
-        if (this.stream === stream) this.stream = undefined;
+        if (this.worker === worker) {
+          worker.close();
+          this.worker = undefined;
+        }
       });
   }
 
   async refreshTransport(): Promise<void> {
-    if (this.worker && !this.closing)
-      this.transport = (await this.worker.request('snapshot')).snapshot;
+    const worker = this.worker;
+    if (worker && !this.closing) {
+      const reply = await worker.request('snapshot');
+      if (this.worker !== worker || this.closing) return;
+      this.transport = reply.snapshot;
+    }
     const b25 = this.b25;
     if (b25 && !this.closing && !this.b25Error && !this.b25Starting) {
       try {
@@ -197,13 +215,17 @@ export class ReceiverSession {
       throw new Error('Start B25 after initialization. Reconnect before retrying');
     if (!Number.isInteger(serviceId) || serviceId < 1 || serviceId > 65535)
       throw new Error('Service ID must be an integer from 1 to 65535');
-    if (!file && !this.worker) throw new Error('Start TS reception');
+    if (!file && (!this.worker || !this.receiving)) throw new Error('Start TS reception');
     if (
       file &&
       (this.b25 || this.receiving || file.size < 188 * 16 || file.size > 64 * 1024 * 1024)
     )
       throw new Error('For saved TS, select a 16-packet to 64 MiB file while reception is stopped');
     if (file && file.size % 188) throw new Error('Saved TS must be a 188-byte packet file');
+    const epoch = this.epoch;
+    const check = () => {
+      if (this.closing || epoch !== this.epoch) throw new Error('B25 session superseded');
+    };
     this.b25Starting = true;
     // Service/channel switches replace only the multiplex-bound filter; a healthy card session is reused.
     this.b25?.close();
@@ -219,20 +241,25 @@ export class ReceiverSession {
     this.fileDecoding = !!file;
     try {
       if (!card.atr) await card.open();
-      if (this.closing) throw new Error('Session closed');
+      check();
       const b25 = (this.b25 = new B25Worker((bytes) => card.transmit(bytes)));
       await b25.request('open', { serviceId, emm, file: !!file });
+      check();
       this.b25ServiceId = serviceId;
       if (file) {
         for (let offset = 0; offset < file.size; offset += 188 * 816) {
-          if (this.closing) throw new Error('Session closed');
+          check();
           await b25.push(await file.slice(offset, offset + 188 * 816).arrayBuffer());
         }
         await b25.request('flush');
-        this.savedClearTs = (await b25.request('download')).blob;
+        check();
+        const reply = await b25.request('download');
+        check();
+        this.savedClearTs = reply.blob;
       } else await this.worker!.request('forward');
+      check();
     } catch (error) {
-      this.failB25(error);
+      if (epoch === this.epoch) this.failB25(error);
       throw error;
     } finally {
       this.b25Starting = false;
@@ -248,7 +275,7 @@ export class ReceiverSession {
     return this.savedClearTs;
   }
   async recordTs(): Promise<void> {
-    if (!this.worker || this.closing) throw new Error('Start TS reception');
+    if (!this.worker || !this.receiving) throw new Error('Start TS reception');
     this.transport = (await this.worker.request('capture')).snapshot;
   }
   async downloadTs(): Promise<Blob | undefined> {

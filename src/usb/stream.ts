@@ -3,8 +3,8 @@ import { withTimeout } from '../driver/bridge';
 export const STREAM_TRANSFER_BYTES = 188 * 816;
 export const STREAM_TRANSFERS = 4;
 
-// WebUSB has no abortable transferIn. On timeout the owner must close the device;
-// stopping only invalidates delivery, never starts a second loop on the same endpoint.
+// WebUSB has no abortable transferIn. A new loop needs all physical reads to settle;
+// if they cannot, the owner closes the device before reusing the endpoint.
 export class UsbTsStream {
   readonly stats = {
     bytes: 0,
@@ -19,6 +19,7 @@ export class UsbTsStream {
   private used = false;
   private lastData = 0;
   private endedAt = 0;
+  private inFlight = new Set<Promise<USBInTransferResult>>();
   constructor(
     private readonly device: Pick<USBDevice, 'transferIn'>,
     private readonly timeoutMs = 5000,
@@ -26,6 +27,18 @@ export class UsbTsStream {
   stop(): void {
     this.active = false;
     this.endedAt ||= performance.now();
+  }
+  get running(): boolean {
+    return this.active;
+  }
+  async drain(): Promise<void> {
+    this.stop();
+    // ponytail: wait one transfer deadline, then reconnect; use abortable WebUSB reads if available.
+    await withTimeout(
+      Promise.allSettled(this.inFlight),
+      this.timeoutMs,
+      () => new Error('TS Bulk IN is still pending; reconnect required'),
+    );
   }
   snapshot() {
     const now = this.endedAt || performance.now();
@@ -40,8 +53,14 @@ export class UsbTsStream {
     };
   }
   async read(length: number): Promise<Uint8Array<ArrayBuffer>> {
+    const transfer = this.device.transferIn(4, length);
+    this.inFlight.add(transfer);
+    void transfer.then(
+      () => this.inFlight.delete(transfer),
+      () => this.inFlight.delete(transfer),
+    );
     const result = await withTimeout(
-      this.device.transferIn(4, length),
+      transfer,
       this.timeoutMs,
       () => new Error('TS Bulk IN timeout; reconnect required'),
     );

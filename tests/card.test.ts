@@ -163,6 +163,19 @@ describe('ATR / T=1', () => {
     expect(await card.transmit(new Uint8Array([1]))).toEqual(new Uint8Array([0x90, 0]));
     expect(io.sent[0]).toHaveLength(5);
   });
+  it('keeps a second response frame delivered in the same UART read', async () => {
+    const io = new MockCard(),
+      card = new T1Card(io);
+    await card.open();
+    io.handler = (f) => {
+      if (f[1] === 0) {
+        const first = frame(0x20, new Uint8Array([1]));
+        const second = frame(0x40, new Uint8Array([0x90, 0]));
+        io.chunks.push(new Uint8Array([...first, ...second]));
+      }
+    };
+    expect(await card.transmit(new Uint8Array([1]))).toEqual(new Uint8Array([1, 0x90, 0]));
+  });
 });
 
 it('uses UART bulk commands, read chunks <=32 and real-send before the final <=48-byte write', async () => {

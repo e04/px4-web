@@ -18,14 +18,15 @@ export class TransportWorker {
     }
   >();
   private closed = false;
-  constructor(onTs?: (bytes: ArrayBuffer) => void) {
+  private forwarded: Promise<unknown> = Promise.resolve();
+  constructor(onTs?: (bytes: ArrayBuffer) => Promise<unknown> | void) {
     this.worker.onmessage = (
       event: MessageEvent<
         Reply & { id: number; error?: string; type?: string; bytes?: ArrayBuffer }
       >,
     ) => {
       if (event.data.type === 'ts') {
-        onTs?.(event.data.bytes!);
+        this.forwarded = Promise.resolve().then(() => onTs?.(event.data.bytes!));
         return;
       }
       const pending = this.pending.get(event.data.id);
@@ -41,13 +42,18 @@ export class TransportWorker {
     if (this.closed) return Promise.reject(new Error('TS Worker closed'));
     if (this.pending.size >= 8) return Promise.reject(new Error('TS Worker queue overflow'));
     const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
+    const reply = new Promise<Reply>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('TS Worker timeout'));
       }, 5000);
       this.pending.set(id, { resolve, reject, timer });
       this.worker.postMessage({ id, type, bytes }, bytes ? [bytes] : []);
+    });
+    if (type !== 'chunk') return reply;
+    return reply.then(async (result) => {
+      await this.forwarded;
+      return result;
     });
   }
   close(): void {
