@@ -1,11 +1,23 @@
 import { TsPipeline } from '../transport/pipeline';
 
-const pipeline = new TsPipeline();
+let pipeline = new TsPipeline();
 let forward = false;
 // One Worker per capture session: old PSI, packet tails and counters cannot enter a new tune.
-self.onmessage = (event: MessageEvent<{ id: number; type: string; bytes?: ArrayBuffer }>) => {
+self.onmessage = (
+  event: MessageEvent<{
+    id: number;
+    type: string;
+    bytes?: ArrayBuffer;
+    receiverIndex?: number;
+    plain?: boolean;
+  }>,
+) => {
   const { id, type, bytes } = event.data;
   try {
+    if (type === 'configure') {
+      pipeline = new TsPipeline(event.data.receiverIndex, event.data.plain);
+      return;
+    }
     if (type === 'forward') forward = true;
     if (type === 'chunk') {
       const output = pipeline.push(new Uint8Array(bytes!), performance.now());

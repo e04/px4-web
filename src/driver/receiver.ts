@@ -1,12 +1,7 @@
 import createTuner, { type TunerModule } from './generated/tuner';
 import { It930xBridge, sleep } from './bridge';
 import type { FirmwareImage } from './firmware';
-
-export function channelFrequency(channel: number): number {
-  if (!Number.isInteger(channel) || channel < 13 || channel > 62)
-    throw new Error('Specify a physical channel as an integer from 13 to 62');
-  return 473143 + (channel - 13) * 6000;
-}
+import { parseChannel, type Channel } from '../channels';
 
 export type ReceiverState =
   | 'connected'
@@ -22,13 +17,14 @@ export type ReceiverState =
 export interface TuneResult {
   generation: number;
   timestamp: string;
-  channel: number;
+  channel: Channel;
   frequencyKHz: number;
-  receiverIndex: 2;
+  receiverIndex: number;
+  transportStreamId?: number;
   pllLocked: boolean;
   demodLocked: boolean;
   elapsedMs: number;
-  timeout?: 'pll' | 'demod';
+  timeout?: 'pll' | 'demod' | 'tsid';
 }
 export interface ReceiverEvent {
   timestamp: string;
@@ -39,6 +35,7 @@ export interface ReceiverEvent {
 export class Receiver {
   state: ReceiverState = 'connected';
   generation = 0;
+  receiverIndex = 2;
   boot?: { mode: 'cold' | 'warm'; version: string };
   private tuner?: TunerModule;
   private pending?: Promise<unknown>;
@@ -131,16 +128,17 @@ export class Receiver {
       this.check();
       await this.bridge.power(true);
       this.check();
-      await this.call('receiver_init');
+      const model = { px4: 0, isdb2056: 1, isdb2056n: 2, mlt: 3 }[this.bridge.family];
+      await this.call('receiver_init', model);
       this.update(
         'ready',
-        `${this.boot.mode} / FW ${this.boot.version} / Terrestrial index 2 initialized`,
+        `${this.boot.mode} / FW ${this.boot.version} / ${this.bridge.family} initialized`,
       );
     });
   }
 
-  tune(channel: number, demodTimeoutMs = 3000): Promise<TuneResult> {
-    const frequencyKHz = channelFrequency(channel);
+  tune(channel: Channel, demodTimeoutMs = 3000): Promise<TuneResult> {
+    const { frequencyKHz, band, slot } = parseChannel(channel);
     if (!Number.isFinite(demodTimeoutMs) || demodTimeoutMs < 20 || demodTimeoutMs > 30000)
       return Promise.reject(new Error('Invalid demodulator timeout'));
     if (!['ready', 'locked', 'streaming'].includes(this.state))
@@ -148,17 +146,27 @@ export class Receiver {
     return this.run(async () => {
       this.update('tuning', `CH ${channel} / ${frequencyKHz} kHz`);
       const start = performance.now();
+      const family = this.bridge.family;
+      this.receiverIndex = family === 'px4' && band === 'T' ? 2 : 0;
       const result: TuneResult = {
         generation: this.generation,
         timestamp: new Date().toISOString(),
         channel,
         frequencyKHz,
-        receiverIndex: 2,
+        receiverIndex: this.receiverIndex,
         pllLocked: false,
         demodLocked: false,
         elapsedMs: 0,
       };
-      await this.call('receiver_frequency', frequencyKHz);
+      // CXD2856ER accepts slot indices 0–7, selected before tuning.
+      if (family === 'mlt' && band !== 'T' && slot >= 8) {
+        await this.call('receiver_pause');
+        result.timeout = 'tsid';
+        result.elapsedMs = Math.round(performance.now() - start);
+        this.update('ready', 'Unsupported satellite slot');
+        return result;
+      }
+      await this.call('receiver_frequency', frequencyKHz, slot);
       const pllDeadline = performance.now() + 500;
       for (let attempt = 0; attempt < 25; attempt++) {
         result.pllLocked = !!(await this.call('receiver_pll'));
@@ -171,14 +179,42 @@ export class Receiver {
         const deadline = performance.now() + demodTimeoutMs;
         let polls = 0;
         while (true) {
-          result.demodLocked = !!(await this.call('receiver_lock'));
-          if (result.demodLocked || performance.now() >= deadline) break;
+          // 2 = no signal reported by the demod; stop waiting like px4_drv's -ECANCELED.
+          const lock = await this.call('receiver_lock');
+          result.demodLocked = lock === 1;
+          if (lock !== 0 || performance.now() >= deadline) break;
           await sleep(20);
           polls++;
         }
         if (!result.demodLocked) result.timeout = 'demod';
-        else if (polls < 35) await sleep((35 - polls) * 10);
+        // PTX_CHRDEV_WAIT_AFTER_LOCK_TC_T: settle only after an early ISDB-T lock.
+        else if (band === 'T' && polls < 35) await sleep((35 - polls) * 10);
       }
+      if (result.demodLocked && band !== 'T' && family !== 'mlt') {
+        const deadline = performance.now() + 1000;
+        let tsid = 0;
+        do {
+          tsid = await this.call('receiver_tsid', slot);
+          if (tsid && tsid !== 0xffff) break;
+          await sleep(10);
+        } while (performance.now() < deadline);
+        let selected = false;
+        if (tsid && tsid !== 0xffff) {
+          await this.call('receiver_select_tsid', tsid);
+          const selectDeadline = performance.now() + 1000;
+          do {
+            selected = (await this.call('receiver_current_tsid')) === tsid;
+            if (selected) break;
+            await sleep(10);
+          } while (performance.now() < selectDeadline);
+        }
+        if (selected) result.transportStreamId = tsid;
+        else {
+          result.demodLocked = false;
+          result.timeout = 'tsid';
+        }
+      }
+      if (!result.demodLocked) await this.call('receiver_pause');
       this.check();
       result.elapsedMs = Math.round(performance.now() - start);
       this.update(
@@ -198,10 +234,9 @@ export class Receiver {
       await this.bridge.mask(0xda1d, 1, 1);
       await this.bridge.mask(0xda1d, 0, 1);
       this.check();
-      // tc90522_enable_ts_pins_t, terrestrial receiver index 2 (address 0x10).
-      await this.bridge.i2cWrite(0x10, new Uint8Array([0x1d, 0x00]));
+      await this.call('receiver_capture');
       this.check();
-      this.update('streaming', 'Receiving terrestrial index 2 TS');
+      this.update('streaming', `Receiving index ${this.receiverIndex} TS`);
     });
   }
 

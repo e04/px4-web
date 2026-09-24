@@ -50,6 +50,25 @@ const pmt = (version = 0) =>
 const start = (s: Uint8Array) => join(new Uint8Array([0]), s);
 
 describe('tagged TS framing', () => {
+  it('selects satellite packets and handles untagged single-receiver streams across chunk boundaries', () => {
+    const source = join(...[0x17, 0x37, 0x17, 0x37].map((tag, cc) => packet(100, cc, tag)));
+    const satellite = new TsPipeline(0);
+    const output = satellite.push(source, 0);
+    expect(output.length).toBe(188 * 2);
+    expect(output[0]).toBe(0x47);
+    expect(output[3] & 15).toBe(0);
+    expect(output[191] & 15).toBe(2);
+    const plainSource = join(...Array.from({ length: 4 }, (_, cc) => packet(100, cc, 0x47)));
+    for (let split = 0; split <= plainSource.length; split++) {
+      const plain = new TsPipeline(0, true);
+      const parts = join(
+        plain.push(plainSource.subarray(0, split), 0),
+        plain.push(plainSource.subarray(split), 1),
+      );
+      expect(parts).toEqual(plainSource);
+      expect(plain.snapshot(1).packetsByReceiver[0]).toBe(4);
+    }
+  });
   it('restores all tags at every possible two-chunk split', () => {
     const source = join(...[0x17, 0x27, 0x37, 0x47, 0x37].map((t) => packet(100, 0, t)));
     for (let split = 0; split <= source.length; split++) {

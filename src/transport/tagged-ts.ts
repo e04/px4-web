@@ -12,6 +12,7 @@ export class TaggedTs {
   constructor(
     private readonly packet: (receiver: number, bytes: Uint8Array) => void,
     private readonly lost: () => void = () => {},
+    private readonly plain = false,
   ) {}
   get bufferedBytes(): number {
     return this.remainder.length;
@@ -20,7 +21,8 @@ export class TaggedTs {
     const bytes = new Uint8Array(this.remainder.length + chunk.length);
     bytes.set(this.remainder);
     bytes.set(chunk, this.remainder.length);
-    const sync = (offset: number) => (bytes[offset] & 0x8f) === 7;
+    const sync = (offset: number) =>
+      this.plain ? bytes[offset] === 0x47 : (bytes[offset] & 0x8f) === 7;
     let offset = 0;
     while (bytes.length - offset >= 188) {
       if (this.locked && !sync(offset)) {
@@ -37,7 +39,7 @@ export class TaggedTs {
         }
         this.locked = true;
       }
-      const receiver = ((bytes[offset] & 0x70) >>> 4) - 1;
+      const receiver = this.plain ? 0 : ((bytes[offset] & 0x70) >>> 4) - 1;
       if (receiver >= 0 && receiver < 4) {
         const packet = bytes.subarray(offset, offset + 188);
         packet[0] = 0x47;

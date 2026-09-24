@@ -9,6 +9,7 @@ import type { TransportSnapshot } from '../transport/pipeline';
 import { CardUart } from '../card/uart';
 import { T1Card } from '../card/t1';
 import { B25Worker } from '../media/b25-client';
+import type { Channel } from '../channels';
 
 export class ReceiverSession {
   private closing?: Promise<void>;
@@ -62,7 +63,11 @@ export class ReceiverSession {
         (e) => e.endpointNumber === 4 && e.direction === 'in',
       )!;
       const control = new UsbControl(device, onTrace);
-      const receiver = new Receiver(new It930xBridge(control), stream.packetSize, onEvent);
+      const receiver = new Receiver(
+        new It930xBridge(control, device.productId),
+        stream.packetSize,
+        onEvent,
+      );
       let session: ReceiverSession;
       const removed = (event: USBConnectionEvent) => {
         if (event.device !== device) return;
@@ -90,7 +95,7 @@ export class ReceiverSession {
   }
 
   async startCapture(): Promise<void> {
-    if (this.closing || this.stream || this.card || this.receiver.state !== 'locked')
+    if (this.closing || this.stream || this.receiver.state !== 'locked')
       throw new Error('Start TS capture after demod lock');
     const epoch = ++this.epoch;
     const { stream, worker } = this.wireStream(epoch);
@@ -109,7 +114,7 @@ export class ReceiverSession {
   // only the TS delivery chain and B25 filter are rebuilt for the new multiplex.
   // A lock failure leaves the receiver in `ready` with no stream; retune stays
   // allowed from ready/locked/streaming so the user can pick another channel.
-  async retune(channel: number): Promise<TuneResult> {
+  async retune(channel: Channel): Promise<TuneResult> {
     if (this.closing || !['ready', 'locked', 'streaming'].includes(this.receiver.state))
       throw new Error('Switch channels while receiving TS');
     const epoch = ++this.epoch;
@@ -145,13 +150,17 @@ export class ReceiverSession {
 
   private wireStream(epoch: number): { stream: UsbTsStream; worker: TransportWorker } {
     const stream = (this.stream = new UsbTsStream(this.device));
-    const worker = (this.worker = new TransportWorker((bytes) => {
-      const b25 = this.closing || epoch !== this.epoch ? undefined : this.b25;
-      if (b25 && !this.fileDecoding && !this.b25Error)
-        return b25.push(bytes).catch((error) => {
-          if (this.b25 === b25) this.failB25(error);
-        });
-    }));
+    const worker = (this.worker = new TransportWorker(
+      (bytes) => {
+        const b25 = this.closing || epoch !== this.epoch ? undefined : this.b25;
+        if (b25 && !this.fileDecoding && !this.b25Error)
+          return b25.push(bytes).catch((error) => {
+            if (this.b25 === b25) this.failB25(error);
+          });
+      },
+      this.receiver.receiverIndex,
+      this.receiver.bridge.family.startsWith('isdb2056'),
+    ));
     return { stream, worker };
   }
 
@@ -205,7 +214,7 @@ export class ReceiverSession {
   async startB25(serviceId: number, emm: boolean, file?: File): Promise<void> {
     if (!this.deviceInfo.hasCardReader)
       throw new Error(
-        'No card reader on this device side. For Q-series, connect to the primary side',
+        'No card reader on this device side. For Q-series use the primary side; for PX-MLT8PE use the 5-tuner side',
       );
     if (
       this.closing ||

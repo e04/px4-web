@@ -1,8 +1,7 @@
-import { SCAN_CHANNELS } from '../scan';
+import { parseChannel } from '../channels';
 import { CAPTION_KEY, CHANNEL_KEY, VOLUME_KEY, loadValue, settingsStore } from '../storage';
 import type { ProgramEvent } from '../transport/program-info';
 
-export const channelNumbers = [...SCAN_CHANNELS];
 export const SCAN_OPTION = '__scan';
 
 export const stateLabels: Record<string, string> = {
@@ -50,7 +49,15 @@ export const DEFAULT_VOLUME = 1;
 
 export async function loadChannel(): Promise<string> {
   const value = await loadValue<string>(CHANNEL_KEY, settingsStore);
-  return channelNumbers.some((channel) => String(channel) === value) ? value! : DEFAULT_CHANNEL;
+  try {
+    if (typeof value === 'string') {
+      parseChannel(value);
+      return value;
+    }
+  } catch {
+    /* Invalid saved selection. */
+  }
+  return DEFAULT_CHANNEL;
 }
 
 export async function loadCaptionEnabled(): Promise<boolean> {

@@ -19,7 +19,12 @@ export class TransportWorker {
   >();
   private closed = false;
   private forwarded: Promise<unknown> = Promise.resolve();
-  constructor(onTs?: (bytes: ArrayBuffer) => Promise<unknown> | void) {
+  constructor(
+    onTs?: (bytes: ArrayBuffer) => Promise<unknown> | void,
+    receiverIndex = 2,
+    plain = false,
+  ) {
+    this.worker.postMessage({ type: 'configure', receiverIndex, plain });
     this.worker.onmessage = (
       event: MessageEvent<
         Reply & { id: number; error?: string; type?: string; bytes?: ArrayBuffer }

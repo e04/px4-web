@@ -38,11 +38,14 @@ export default function App() {
     openPlayback: playback.openPlayback,
     refreshPlayback: playback.refreshPlayback,
   });
-  const selectedProgram = session.service
-    ? session.programs?.[Number(session.service)]
-    : undefined;
+  const selectedProgram = session.service ? session.programs?.[Number(session.service)] : undefined;
   const currentProgram = session.service
-    ? currentServiceProgram(selectedProgram?.current, session.epg, Number(session.service), session.epgNow)
+    ? currentServiceProgram(
+        selectedProgram?.current,
+        session.epg,
+        Number(session.service),
+        session.epgNow,
+      )
     : null;
   useEffect(() => {
     const stationName = selectedProgram?.stationName ?? '';
@@ -56,6 +59,8 @@ export default function App() {
           <Alert title="WebUSB unavailable">Use Chrome over HTTPS or localhost.</Alert>
         )}
         <TunerBar
+          band={session.band}
+          onBand={session.changeBand}
           channel={session.channel}
           channelOptions={session.channelOptions}
           service={session.service}

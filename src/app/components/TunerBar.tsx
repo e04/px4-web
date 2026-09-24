@@ -2,6 +2,8 @@ import { Box, Button, CheckIcon, Group, Select, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
 
 interface TunerBarProps {
+  band: string;
+  onBand: (value: string | null) => void;
   channel: string;
   channelOptions: { value: string; label: string; station: string; program: string }[];
   service: string | null;
@@ -17,6 +19,8 @@ interface TunerBarProps {
 }
 
 export function TunerBar({
+  band,
+  onBand,
   channel,
   channelOptions,
   service,
@@ -33,15 +37,42 @@ export function TunerBar({
   return (
     <Group align="end" gap="sm">
       <Select
+        aria-label="Broadcast"
+        value={band}
+        onChange={onBand}
+        data={[
+          { value: 'T', label: '地デジ' },
+          { value: 'BS', label: 'BS' },
+          { value: 'CS', label: '110°CS' },
+        ]}
+        allowDeselect={false}
+        disabled={busy}
+        w={110}
+      />
+      <Select
         aria-label="Physical channel"
         data={channelOptions}
         renderOption={({ option, checked }) => {
           const entry = channelOptions.find((item) => item.value === option.value);
           return (
-            <Box style={{ display: 'grid', gridTemplateColumns: '20px minmax(0, 220px) minmax(0, 1fr)', gap: 12, width: '100%', alignItems: 'center' }}>
-              <Box w={20} h={20}>{checked && <CheckIcon size={16} />}</Box>
-              <Text size="sm" fw={700} truncate>{entry?.station ?? option.label}</Text>
-              <Text size="sm" truncate>{entry?.program ?? ''}</Text>
+            <Box
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '20px minmax(0, 220px) minmax(0, 1fr)',
+                gap: 12,
+                width: '100%',
+                alignItems: 'center',
+              }}
+            >
+              <Box w={20} h={20}>
+                {checked && <CheckIcon size={16} />}
+              </Box>
+              <Text size="sm" fw={700} truncate>
+                {entry?.station ?? option.label}
+              </Text>
+              <Text size="sm" truncate>
+                {entry?.program ?? ''}
+              </Text>
             </Box>
           );
         }}

@@ -4,7 +4,7 @@ import type { ReceiverEvent } from '../../driver/receiver';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import { ReceiverSession } from '../../usb/receiver-session';
 import {
-  SCAN_CHANNELS,
+  DEFAULT_SCAN,
   channelLabel,
   isChannelHidden,
   loadScan,
@@ -18,17 +18,18 @@ import { CHANNEL_KEY, saveValue, settingsStore } from '../../storage';
 import { DEFAULT_CHANNEL, SCAN_OPTION, loadChannel, stateLabels } from '../format';
 import { currentChannelProgram, loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
 import type { ProgramInfo } from '../../transport/program-info';
+import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 
 export type StreamStats = NonNullable<ReceiverSession['streamStats']>;
 
 export interface ScanProgress {
   done: number;
   total: number;
-  channel: number;
+  channel: Channel;
 }
 
 export interface ScanResult {
-  channel: number;
+  channel: Channel;
   entry: ScanEntry;
 }
 
@@ -53,8 +54,9 @@ export function useReceiverSession({
   openPlayback,
   refreshPlayback,
 }: UseReceiverSessionOptions) {
-  const [scan, setScan] = useState<ScanMap>({});
+  const [scan, setScan] = useState<ScanMap>(DEFAULT_SCAN);
   const [channel, setChannel] = useState<string>(DEFAULT_CHANNEL);
+  const band = parseChannel(channel).band;
   const hydratedRef = useRef(false);
   const [service, setService] = useState<string | null>(null);
   const [services, setServices] = useState<number[]>([]);
@@ -69,7 +71,7 @@ export function useReceiverSession({
   const channelOptions = useMemo(
     () => [
       { value: SCAN_OPTION, label: 'Scan channels…', station: 'Scan channels…', program: '' },
-      ...visibleChannels(scan).map((item) => {
+      ...visibleChannels(scan, band).map((item) => {
         const entry = scan[String(item)];
         const event = currentChannelProgram(
           channelEpg[String(item)],
@@ -85,7 +87,7 @@ export function useReceiverSession({
         };
       }),
     ],
-    [scan, channelEpg, epgNow],
+    [scan, band, channelEpg, epgNow],
   );
   const [transport, setTransport] = useState<TransportSnapshot>();
   const [programs, setPrograms] = useState<TransportSnapshot['programs']>();
@@ -134,7 +136,9 @@ export function useReceiverSession({
   useEffect(() => {
     let cancelled = false;
     void Promise.all(
-      SCAN_CHANNELS.map(async (number) => [String(number), await loadEpg(String(number))] as const),
+      (['T', 'BS', 'CS'] as const)
+        .flatMap(channelsFor)
+        .map(async (number) => [String(number), await loadEpg(String(number))] as const),
     ).then((entries) => {
       if (!cancelled) setChannelEpg((current) => ({ ...Object.fromEntries(entries), ...current }));
     });
@@ -153,7 +157,7 @@ export function useReceiverSession({
       setScan(savedScan);
       if (!isChannelHidden(savedScan, savedChannel)) setChannel(savedChannel);
       else {
-        const first = visibleChannels(savedScan)[0];
+        const first = visibleChannels(savedScan, parseChannel(savedChannel).band)[0];
         setChannel(first != null ? String(first) : savedChannel);
       }
       hydratedRef.current = true;
@@ -306,13 +310,14 @@ export function useReceiverSession({
         `${session.deviceInfo.productName} connected${session.deviceInfo.devId != null ? ` (dev ${session.deviceInfo.devId})` : ''}${session.deviceInfo.hasCardReader ? '' : ' [no card reader]'}`,
       );
       await session.receiver.initialize(firmware);
-      // ponytail: empty map = never scanned; partial scan counts as done.
-      if (hydratedRef.current && Object.keys(scan).length === 0) {
+      // ponytail: no entries for this band = never scanned; partial scan counts as done.
+      // BS/CS always have built-in defaults, so only terrestrial auto-scans.
+      if (hydratedRef.current && !channelsFor(band).some((item) => scan[String(item)])) {
         addLog('No scan data — starting channel scan');
         await runScan(true);
         return;
       }
-      const result = await session.receiver.tune(Number(channel));
+      const result = await session.receiver.tune(channel);
       if (!result.demodLocked) throw new Error('The channel could not be locked.');
       await session.startCapture();
       setStatus('Discovering services');
@@ -321,8 +326,8 @@ export function useReceiverSession({
       setService(String(found[0]));
       addLog(`${found.length} service${found.length === 1 ? '' : 's'} found`);
       if (!session.deviceInfo.hasCardReader) {
-        addLog('Card reader is on the primary side', true);
-        setStatus('Playback error: Card reader is on the primary side');
+        addLog('Use the device side with a card reader (Q: primary; MLT8: 5 tuners)', true);
+        setStatus('Playback error: No card reader on this device side');
         return;
       }
       try {
@@ -355,7 +360,7 @@ export function useReceiverSession({
   };
 
   const changeChannel = async (value: string | null) => {
-    if (!value) return;
+    if (!value || busy) return;
     if (value === SCAN_OPTION) {
       void runScan();
       return;
@@ -370,7 +375,7 @@ export function useReceiverSession({
       stopPlayer();
       setStatus(`Switching to CH ${value}`);
       addLog(`Switching to CH ${value}`);
-      await session.retune(Number(value));
+      await session.retune(value);
       setStatus('Discovering services');
       const found = await waitForServices(session);
       setServices(found);
@@ -426,10 +431,18 @@ export function useReceiverSession({
     setStatus('Cancelling scan…');
   };
 
-  // Scan CH 13-62 in order, persisting station names for the channel labels.
+  const changeBand = (value: string | null) => {
+    if (!value || busy || !['T', 'BS', 'CS'].includes(value)) return;
+    const channels = visibleChannels(scan, value as Broadcast);
+    const first = channels.find((item) => scan[String(item)]?.locked) ?? channels[0];
+    void changeChannel(String(first ?? channelsFor(value as Broadcast)[0]));
+  };
+
+  // Scan the selected broadcast band, persisting station names for channel labels.
   // Works on the live session or connects first when disconnected.
   const runScan = async (fromConnect = false) => {
     if (scanning || (busy && !fromConnect)) return;
+    const scanChannelsForBand = channelsFor(band);
     scanAbortRef.current = false;
     setScanCancelling(false);
     const controller = new AbortController();
@@ -440,7 +453,11 @@ export function useReceiverSession({
     setScanEvents([]);
     setPrograms(undefined);
     programKeyRef.current = undefined;
-    setScanProgress({ done: 0, total: SCAN_CHANNELS.length, channel: SCAN_CHANNELS[0] });
+    setScanProgress({
+      done: 0,
+      total: scanChannelsForBand.length,
+      channel: scanChannelsForBand[0],
+    });
     const priorChannel = channel;
     const seeded = scan;
     const merged: ScanMap = { ...seeded };
@@ -451,20 +468,22 @@ export function useReceiverSession({
       if (!session || current !== session) return;
       // Stay on a visible channel: fall back to the first receivable one when
       // the previous channel turned out unreceivable.
-      const fallback = visibleChannels(results)[0];
+      const fallback = visibleChannels(results, band).find((item) => results[String(item)]?.locked);
       const target =
         results[priorChannel]?.locked || !results[priorChannel]
           ? priorChannel
           : fallback != null
             ? String(fallback)
-            : priorChannel;
+            : undefined;
       if (target == null) {
+        setServices([]);
+        setService(null);
         setStatus(owned ? 'No receivable channels found' : 'Ready');
         return;
       }
       setChannel(target);
       try {
-        await session.retune(Number(target));
+        await session.retune(target);
         setStatus('Discovering services');
         const found = await waitForServices(session);
         setServices(found);
@@ -498,8 +517,9 @@ export function useReceiverSession({
         await fresh.receiver.initialize(firmware);
       }
       if (controller.signal.aborted) throw new Error('Scan cancelled');
-      setStatus(`Scanning channels (0/${SCAN_CHANNELS.length})`);
+      setStatus(`Scanning channels (0/${scanChannelsForBand.length})`);
       await scanChannels(session, {
+        channels: scanChannelsForBand,
         signal: controller.signal,
         isAborted: () => scanAbortRef.current,
         onPrograms: async (found, programs) => {
@@ -532,8 +552,8 @@ export function useReceiverSession({
         },
       });
       if (controller.signal.aborted) throw new Error('Scan cancelled');
-      const locked = Object.values(merged).filter((entry) => entry.locked);
-      addLog(`Scan complete: ${locked.length}/${SCAN_CHANNELS.length} channels receivable`);
+      const locked = scanChannelsForBand.filter((item) => merged[String(item)]?.locked);
+      addLog(`Scan complete: ${locked.length}/${scanChannelsForBand.length} channels receivable`);
       await restore(merged);
     } catch (error) {
       const cancelled =
@@ -564,6 +584,8 @@ export function useReceiverSession({
   return {
     scan,
     channel,
+    band,
+    changeBand,
     service,
     services,
     channelOptions,

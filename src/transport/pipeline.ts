@@ -7,15 +7,22 @@ export class TsPipeline {
   readonly capture = new TsCapture();
   private output = new Uint8Array(0);
   private length = 0;
-  readonly tagged = new TaggedTs(
-    (receiver, packet) => {
-      if (receiver !== 2) return;
-      this.analyzer.push(packet);
-      this.output.set(packet, this.length);
-      this.length += 188;
-    },
-    () => this.analyzer.resetContinuity(),
-  );
+  readonly tagged: TaggedTs;
+  constructor(
+    readonly receiverIndex = 2,
+    plain = false,
+  ) {
+    this.tagged = new TaggedTs(
+      (receiver, packet) => {
+        if (receiver !== this.receiverIndex) return;
+        this.analyzer.push(packet);
+        this.output.set(packet, this.length);
+        this.length += 188;
+      },
+      () => this.analyzer.resetContinuity(),
+      plain,
+    );
+  }
   push(bytes: Uint8Array, now: number): Uint8Array<ArrayBuffer> {
     this.output = new Uint8Array(bytes.length + 188 * 4);
     this.length = 0;

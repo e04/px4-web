@@ -12,8 +12,10 @@ vi.mock('../src/storage', () => {
   };
 });
 
-import { saveValue, scanStore } from '../src/storage';
+import { loadValue, saveValue, scanStore } from '../src/storage';
+import type { Channel } from '../src/channels';
 import {
+  DEFAULT_SCAN,
   SCAN_STORAGE_KEY,
   channelLabel,
   isChannelHidden,
@@ -35,16 +37,16 @@ interface ScriptedChannel {
 }
 
 // Minimal structural fake of the session subset used by scanChannels.
-function fakeSession(script: Record<number, ScriptedChannel>): ScanSession & {
-  tuned: number[];
+function fakeSession(script: Record<string, ScriptedChannel>): ScanSession & {
+  tuned: Channel[];
 } {
-  const tuned: number[] = [];
-  let current = 0;
+  const tuned: Channel[] = [];
+  let current: Channel = 0;
   const session: ScanSession = {
     receiving: false,
     transport: undefined,
     receiver: {
-      tune: async (channel: number) => {
+      tune: async (channel: Channel) => {
         tuned.push(channel);
         current = channel;
         return { demodLocked: script[channel]?.locked ?? false };
@@ -53,7 +55,7 @@ function fakeSession(script: Record<number, ScriptedChannel>): ScanSession & {
     startCapture: async () => {
       (session as { receiving: boolean }).receiving = true;
     },
-    retune: async (channel: number) => {
+    retune: async (channel: Channel) => {
       tuned.push(channel);
       current = channel;
       const entry = script[channel];
@@ -107,13 +109,57 @@ describe('scan persistence and labels', () => {
     });
     expect((await loadScan())['27']?.services[0]?.stationName).toBe('A');
     await saveValue(SCAN_STORAGE_KEY, 'not json', scanStore);
-    expect(await loadScan()).toEqual({});
+    expect(await loadScan()).toEqual(DEFAULT_SCAN);
     await saveValue(SCAN_STORAGE_KEY, { 28: { locked: 'yes' } }, scanStore);
-    expect(await loadScan()).toEqual({});
+    expect(await loadScan()).toEqual(DEFAULT_SCAN);
+  });
+
+  it('provides the nationwide BS/CS lineup until the user scans, without persisting it', async () => {
+    await saveValue(SCAN_STORAGE_KEY, undefined, scanStore);
+    const defaults = await loadScan();
+    expect(channelLabel('BS1_0', defaults.BS1_0)).toBe('CH BS1_0 · BS朝日');
+    expect(visibleChannels(defaults, 'BS')).toContain('BS15_2');
+    expect(visibleChannels(defaults, 'BS')).not.toContain('BS9_1');
+    expect(visibleChannels(defaults, 'CS')).toHaveLength(12);
+    expect(visibleChannels(defaults, 'T')).toHaveLength(50);
+
+    await saveScan({
+      ...defaults,
+      BS1_0: { locked: false, services: [], scannedAt: 5 },
+      BS9_1: { locked: true, services: [{ serviceId: 999, stationName: 'New' }], scannedAt: 5 },
+    });
+    expect(Object.keys((await loadValue(SCAN_STORAGE_KEY, scanStore)) as object)).toEqual([
+      'BS1_0',
+      'BS9_1',
+    ]);
+    const scanned = await loadScan();
+    expect(visibleChannels(scanned, 'BS')).not.toContain('BS1_0');
+    expect(channelLabel('BS9_1', scanned.BS9_1)).toBe('CH BS9_1 · New');
+    expect(scanned.BS1_1).toEqual(DEFAULT_SCAN.BS1_1);
   });
 });
 
 describe('scanChannels', () => {
+  it('scans satellite slots independently and preserves terrestrial entries when merged', async () => {
+    const session = fakeSession({
+      BS1_0: { locked: true, services: [{ serviceId: 101, stationName: 'BS A' }] },
+      BS1_1: { locked: false },
+      BS1_2: { locked: true, services: [{ serviceId: 102, stationName: 'BS B' }] },
+    });
+    const result = await scanChannels(session, {
+      channels: ['BS1_0', 'BS1_1', 'BS1_2'],
+      siSettleMs: 0,
+    });
+    expect(session.tuned).toEqual(['BS1_0', 'BS1_1', 'BS1_2']);
+    expect(result.BS1_0.services[0].stationName).toBe('BS A');
+    expect(result.BS1_1.locked).toBe(false);
+    expect(result.BS1_2.services[0].serviceId).toBe(102);
+    await saveScan({ 13: { locked: true, services: [], scannedAt: 1 }, ...result });
+    const restored = await loadScan();
+    expect(restored['13'].locked).toBe(true);
+    expect(visibleChannels(restored, 'BS')).not.toContain('BS1_1');
+    expect(visibleChannels(restored, 'CS')).toContain('CS2_0');
+  });
   it('waits up to 10 seconds by default for a locked channel without a station name', async () => {
     vi.useFakeTimers();
     try {

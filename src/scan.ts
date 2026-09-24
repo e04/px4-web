@@ -1,5 +1,7 @@
 import { loadValue, saveValue, scanStore } from './storage';
 import type { ProgramEvent } from './transport/program-info';
+import { channelsFor, TERRESTRIAL_CHANNELS, type Broadcast, type Channel } from './channels';
+import { SATELLITE_DEFAULTS } from './satellite-defaults';
 
 export interface ScannedService {
   serviceId: number;
@@ -16,7 +18,7 @@ export type ScanMap = Record<string, ScanEntry>;
 
 export const SCAN_STORAGE_KEY = 'px4-scan-v1';
 // UHF physical channels for terrestrial broadcasts in Japan.
-export const SCAN_CHANNELS = Array.from({ length: 50 }, (_, index) => index + 13);
+export const SCAN_CHANNELS = TERRESTRIAL_CHANNELS;
 
 const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -52,7 +54,28 @@ function isScanEntry(value: unknown): value is ScanEntry {
   );
 }
 
-export async function loadScan(): Promise<ScanMap> {
+// scannedAt 0 marks a built-in entry; real scans always stamp Date.now().
+const DEFAULT_SCANNED_AT = 0;
+
+/**
+ * Built-in BS/CS lineup: listed slots are receivable, every other satellite
+ * slot is hidden. Saved (scanned) entries override these per channel.
+ */
+export const DEFAULT_SCAN: ScanMap = (() => {
+  const known = new Map(SATELLITE_DEFAULTS.map(([channel, ...rest]) => [String(channel), rest]));
+  const map: ScanMap = {};
+  for (const channel of [...channelsFor('BS'), ...channelsFor('CS')]) {
+    const service = known.get(String(channel));
+    map[String(channel)] = {
+      locked: !!service,
+      services: service ? [{ serviceId: service[0], stationName: service[1] }] : [],
+      scannedAt: DEFAULT_SCANNED_AT,
+    };
+  }
+  return map;
+})();
+
+async function loadSavedScan(): Promise<ScanMap> {
   try {
     const parsed: unknown = await loadValue(SCAN_STORAGE_KEY, scanStore);
     if (!parsed) return {};
@@ -66,8 +89,17 @@ export async function loadScan(): Promise<ScanMap> {
   }
 }
 
+/** Saved scan results layered over the built-in satellite lineup. */
+export async function loadScan(): Promise<ScanMap> {
+  return { ...DEFAULT_SCAN, ...(await loadSavedScan()) };
+}
+
+/** Persists scanned entries only, so built-in defaults stay updatable. */
 export async function saveScan(map: ScanMap): Promise<void> {
-  await saveValue(SCAN_STORAGE_KEY, map, scanStore);
+  const scanned = Object.fromEntries(
+    Object.entries(map).filter(([, entry]) => entry.scannedAt !== DEFAULT_SCANNED_AT),
+  );
+  await saveValue(SCAN_STORAGE_KEY, scanned, scanStore);
 }
 
 /** Known-unreceivable channels are hidden from the selector; unscanned stay visible. */
@@ -76,8 +108,8 @@ export function isChannelHidden(map: ScanMap, channel: string | number): boolean
   return !!entry && !entry.locked;
 }
 
-export function visibleChannels(map: ScanMap): number[] {
-  return SCAN_CHANNELS.filter((channel) => !isChannelHidden(map, channel));
+export function visibleChannels(map: ScanMap, band: Broadcast = 'T'): Channel[] {
+  return channelsFor(band).filter((channel) => !isChannelHidden(map, channel));
 }
 
 /** First named service; empty when unscanned, unlocked, or nameless. */
@@ -86,7 +118,7 @@ export function representativeName(entry: ScanEntry | undefined): string {
   return entry.services.find((service) => service.stationName)?.stationName ?? '';
 }
 
-export function channelLabel(channel: number, entry: ScanEntry | undefined): string {
+export function channelLabel(channel: Channel, entry: ScanEntry | undefined): string {
   const name = representativeName(entry);
   return name ? `CH ${channel} · ${name}` : `CH ${channel}`;
 }
@@ -94,10 +126,10 @@ export function channelLabel(channel: number, entry: ScanEntry | undefined): str
 // Structural subset of ReceiverSession so tests can pass a fake.
 export interface ScanSession {
   receiver: {
-    tune(channel: number, timeoutMs?: number): Promise<{ demodLocked: boolean }>;
+    tune(channel: Channel, timeoutMs?: number): Promise<{ demodLocked: boolean }>;
   };
   startCapture(): Promise<void>;
-  retune(channel: number): Promise<{ demodLocked: boolean }>;
+  retune(channel: Channel): Promise<{ demodLocked: boolean }>;
   refreshTransport(): Promise<void>;
   readonly receiving?: boolean;
   transport?: {
@@ -115,15 +147,15 @@ export interface ScanSession {
 }
 
 export interface ScanOptions {
-  channels?: number[];
+  channels?: Channel[];
   tuneTimeoutMs?: number;
   siSettleMs?: number;
   pollMs?: number;
   signal?: AbortSignal;
   isAborted?: () => boolean;
-  onProgress?: (channel: number, entry: ScanEntry, done: number, total: number) => void;
+  onProgress?: (channel: Channel, entry: ScanEntry, done: number, total: number) => void;
   onPrograms?: (
-    channel: number,
+    channel: Channel,
     programs: NonNullable<NonNullable<ScanSession['transport']>['programs']>,
   ) => Promise<void> | void;
 }
@@ -149,7 +181,7 @@ export async function scanChannels(
   const result: ScanMap = {};
   let streaming = !!session.receiving;
 
-  const record = (channel: number, entry: ScanEntry, done: number) => {
+  const record = (channel: Channel, entry: ScanEntry, done: number) => {
     result[String(channel)] = entry;
     options.onProgress?.(channel, entry, done, channels.length);
   };

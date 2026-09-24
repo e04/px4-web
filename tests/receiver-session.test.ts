@@ -2,11 +2,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ReceiverSession } from '../src/usb/receiver-session';
 import { B25Worker } from '../src/media/b25-client';
 import { T1Card } from '../src/card/t1';
+import { Receiver } from '../src/driver/receiver';
+import { px4UsbFilters } from '../src/usb/px4-devices';
 
 const mocks = vi.hoisted(() => ({
   mask: vi.fn(async () => {}),
   power: vi.fn(async () => {}),
   i2cWrite: vi.fn(async () => {}),
+  tunerCall: vi.fn(async () => 0),
   workerRequest: vi.fn(async (_type: string, _bytes?: ArrayBuffer) => ({
     blob: new Blob(),
     snapshot: undefined,
@@ -19,6 +22,7 @@ vi.mock('../src/driver/bridge', async (importOriginal) => {
   return {
     ...actual,
     It930xBridge: class {
+      family = 'px4';
       mask = mocks.mask;
       power = mocks.power;
       i2cWrite = mocks.i2cWrite;
@@ -94,13 +98,21 @@ function usb() {
     unplug: () => disconnect({ device } as unknown as USBConnectionEvent),
   };
 }
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // These session tests bypass hardware initialization; the adapter is tested separately.
+  vi.spyOn(
+    Receiver.prototype as unknown as { call: () => Promise<number> },
+    'call',
+  ).mockImplementation(mocks.tunerCall);
+});
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
-it('requests any of the six PX4 family PIDs and records the device info', async () => {
+it('requests supported tuner PIDs and records the device info', async () => {
   const { device } = usb();
   const session = await ReceiverSession.connect(
     () => {},
@@ -116,10 +128,7 @@ it('requests any of the six PX4 family PIDs and records the device info', async 
     }
   ).filters;
   expect(device.productId).toBe(0x023f);
-  expect(filters).toHaveLength(6);
-  expect(filters.map((filter) => filter.productId).sort((a: number, b: number) => a - b)).toEqual([
-    0x023f, 0x024a, 0x073f, 0x074a, 0x083f, 0x084a,
-  ]);
+  expect(filters).toEqual(px4UsbFilters());
   expect(session.deviceInfo).toMatchObject({
     productId: 0x023f,
     productName: 'PXW3PE4',
@@ -153,8 +162,8 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
     [0xda1d, 1, 1],
     [0xda1d, 0, 1],
   ]);
-  expect(mocks.i2cWrite).toHaveBeenCalledWith(0x10, new Uint8Array([0x1d, 0]));
-  expect(mocks.i2cWrite.mock.invocationCallOrder[0]).toBeLessThan(
+  expect(mocks.tunerCall).toHaveBeenCalledWith('receiver_capture');
+  expect(mocks.tunerCall.mock.invocationCallOrder[0]).toBeLessThan(
     device.transferIn.mock.invocationCallOrder[0],
   );
   expect(device.transferIn.mock.calls[0]).toEqual([4, 188 * 816]);
@@ -215,8 +224,8 @@ it('enables TS pins when retuning from ready before any capture', async () => {
     return { demodLocked: true } as never;
   });
   await session.retune(26);
-  expect(mocks.i2cWrite).toHaveBeenCalledWith(0x10, new Uint8Array([0x1d, 0]));
-  expect(mocks.i2cWrite.mock.invocationCallOrder[0]).toBeLessThan(
+  expect(mocks.tunerCall).toHaveBeenCalledWith('receiver_capture');
+  expect(mocks.tunerCall.mock.invocationCallOrder[0]).toBeLessThan(
     device.transferIn.mock.invocationCallOrder[0],
   );
   expect(session.receiver.state).toBe('streaming');

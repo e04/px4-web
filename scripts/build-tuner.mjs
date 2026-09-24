@@ -28,7 +28,7 @@ run(process.env.EMCC || 'emcc', [
   'wasm/tuner/compat.h',
   `-I${driver}`,
   'wasm/tuner/adapter.c',
-  ...['r850', 'rt710', 'tc90522'].map((name) => `${driver}/${name}.c`),
+  ...['r850', 'rt710', 'tc90522', 'cxd2856er', 'cxd2858er'].map((name) => `${driver}/${name}.c`),
   '-sASYNCIFY=1',
   '-sASSERTIONS=1',
   '-sMODULARIZE=1',
