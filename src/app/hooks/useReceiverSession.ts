@@ -26,8 +26,6 @@ import { logoDataUrl, logoKey, type LogoData } from '../../logo';
 import { loadLogos, mergeLogos, type LogoLibrary } from '../../logo-store';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 
-export type StreamStats = NonNullable<ReceiverSession['streamStats']>;
-
 export type ChannelOption = ReturnType<typeof useReceiverSession>['channelOptions'][number];
 
 export interface ScanProgress {
@@ -146,13 +144,10 @@ export function useReceiverSession({
   const lastEpgSave = useRef(0);
   const epgDirty = useRef(false);
   const scanActiveRef = useRef(false);
-  const [stream, setStream] = useState<StreamStats>();
   const [connected, setConnected] = useState(false);
   const [deviceLabel, setDeviceLabel] = useState('');
   const [cardless, setCardless] = useState(false);
   const [b25, setB25] = useState<Record<string, number | boolean | undefined>>();
-  // '' = no free tuner; otherwise what the EPG crawl tuner is doing.
-  const [epgCrawl, setEpgCrawl] = useState('');
   const scanRef = useRef(scan);
   scanRef.current = scan;
   const crawlDoneRef = useRef<Promise<void>>(Promise.resolve());
@@ -204,7 +199,6 @@ export function useReceiverSession({
     setTransport(undefined);
     setPrograms(undefined);
     programKeyRef.current = undefined;
-    setStream(undefined);
     setB25(undefined);
     setDeviceLabel('');
     setCardless(false);
@@ -337,7 +331,6 @@ export function useReceiverSession({
                 }
               }
             }
-            setStream(current.streamStats ? { ...current.streamStats } : undefined);
             const nextServices = current.transport?.services.map((item) => item.serviceId) ?? [];
             setService((selected) =>
               selected && nextServices.includes(Number(selected))
@@ -386,7 +379,6 @@ export function useReceiverSession({
     if (!connected || scanning || !session?.hasEpgTuner) return;
     const controller = new AbortController();
     const previous = crawlDoneRef.current;
-    setEpgCrawl('Idle');
     // Wait for a missing logo once per channel; CDT repeats far less often than EIT.
     const logoWaited = new Set<string>();
     const done = previous.then(() =>
@@ -398,9 +390,6 @@ export function useReceiverSession({
             .filter((item) => scanRef.current[String(item)]?.locked),
         skip: (item) => String(item) === channelRef.current,
         hold: (item, transport) => !logoWaited.has(String(item)) && logoMissing(transport),
-        onChannel: (item) => {
-          if (!controller.signal.aborted) setEpgCrawl(item == null ? 'Idle' : `CH ${item}`);
-        },
         onPrograms: async (item, programs, logos) => {
           const key = String(item);
           logoWaited.add(key);
@@ -420,10 +409,7 @@ export function useReceiverSession({
       }),
     );
     crawlDoneRef.current = done.catch(() => {});
-    return () => {
-      controller.abort();
-      setEpgCrawl('');
-    };
+    return () => controller.abort();
     // Session identity changes always toggle `connected`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, scanning]);
@@ -764,12 +750,10 @@ export function useReceiverSession({
     scanEvents,
     transport,
     programs,
-    stream,
     connected,
     deviceLabel,
     cardless,
     b25,
-    epgCrawl,
     connect,
     selectStation,
     cancelScan,

@@ -3,7 +3,6 @@ import { Box, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import type { ProgramEvent } from '../../transport/program-info';
 import type { PlayerSnapshot } from '../hooks/usePlayback';
-import type { StreamStats } from '../hooks/useReceiverSession';
 import { format, schedule } from '../format';
 
 interface ProgramInfoProps {
@@ -58,29 +57,25 @@ export const ProgramInfo = memo(function ProgramInfo({
 });
 
 interface MetricsGridProps {
-  stream: StreamStats | undefined;
   transport: TransportSnapshot | undefined;
   playback: PlayerSnapshot | undefined;
   deviceLabel: string;
   cardless: boolean;
   b25: Record<string, number | boolean | undefined> | undefined;
-  epgCrawl: string;
   status: string;
 }
 
 export function MetricsGrid({
-  stream,
   transport,
   playback,
   deviceLabel,
   cardless,
   b25,
-  epgCrawl,
   status,
 }: MetricsGridProps) {
   const metrics: [string, string][] = [
-    ['Bitrate', format(stream?.mbps, ' Mbps', 2)],
-    ['Max input gap', format(stream?.maxGapMs, ' ms', 0)],
+    ['Bitrate', format(transport?.mbps, ' Mbps', 2)],
+    ['Max input gap', format(transport?.maxGapMs, ' ms', 0)],
     ['CC errors', transport?.ccErrors.toLocaleString() ?? '—'],
     ['TEI errors', transport?.tei.toLocaleString() ?? '—'],
     ['Sync losses', transport?.syncLosses.toLocaleString() ?? '—'],
@@ -91,7 +86,6 @@ export function MetricsGrid({
     ['Resyncs', playback?.resyncs.toLocaleString() ?? '—'],
     ['Device', deviceLabel || '—'],
     ['Card', cardless ? 'No reader' : b25?.cardReady ? 'Ready' : '—'],
-    ['EPG tuner', epgCrawl || '—'],
   ];
   return (
     <Paper bg="dark.9" p="md">

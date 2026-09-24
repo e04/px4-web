@@ -7,6 +7,10 @@ export class TsPipeline {
   readonly capture = new TsCapture();
   private output = new Uint8Array(0);
   private length = 0;
+  // Main-receiver arrival timing; the USB stream also carries the EPG tuner's packets.
+  private startedAt = 0;
+  private lastData = 0;
+  private maxGapMs = 0;
   readonly tagged: TaggedTs;
   constructor(
     readonly receiverIndex = 2,
@@ -28,14 +32,23 @@ export class TsPipeline {
     this.length = 0;
     this.tagged.push(bytes);
     const output = this.output.slice(0, this.length);
+    if (output.length) {
+      if (!this.startedAt) this.startedAt = now;
+      else this.maxGapMs = Math.max(this.maxGapMs, now - this.lastData);
+      this.lastData = now;
+    }
     this.capture.push(output, now);
     this.output = new Uint8Array(0);
     return output;
   }
   snapshot(now: number) {
     this.capture.tick(now);
+    const elapsedMs = this.lastData - this.startedAt;
+    const packets = this.tagged.stats.packetsByReceiver[this.receiverIndex] ?? 0;
     return {
       ...this.tagged.stats,
+      mbps: elapsedMs > 0 ? (packets * 188 * 8) / elapsedMs / 1000 : 0,
+      maxGapMs: this.maxGapMs,
       bufferedBytes: this.tagged.bufferedBytes,
       ...this.analyzer.snapshot(),
       capture: {

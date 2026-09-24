@@ -138,13 +138,11 @@ export default function App() {
                 onScan={(band) => void session.runScan(band)}
               />
               <MetricsGrid
-                stream={session.stream}
                 transport={session.transport}
                 playback={playback.playback}
                 deviceLabel={session.deviceLabel}
                 cardless={session.cardless}
                 b25={session.b25}
-                epgCrawl={session.epgCrawl}
                 status={status}
               />
             </Stack>

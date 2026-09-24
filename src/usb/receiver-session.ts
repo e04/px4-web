@@ -33,9 +33,6 @@ export class ReceiverSession {
   get receiving(): boolean {
     return !!this.stream?.running && !this.closing;
   }
-  get streamStats() {
-    return this.stream?.snapshot();
-  }
   private constructor(
     readonly device: USBDevice,
     readonly receiver: Receiver,
