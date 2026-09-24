@@ -134,6 +134,7 @@ export default function App() {
                 deviceLabel={session.deviceLabel}
                 cardless={session.cardless}
                 b25={session.b25}
+                epgCrawl={session.epgCrawl}
                 status={status}
               />
             </Stack>

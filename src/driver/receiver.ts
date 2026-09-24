@@ -42,6 +42,7 @@ export class Receiver {
   private activeGeneration = 0;
   private stopPending?: Promise<void>;
   private bridgeInitialized = false;
+  private callQueue: Promise<unknown> = Promise.resolve();
   constructor(
     readonly bridge: It930xBridge,
     private readonly maxPacketSize: number,
@@ -56,20 +57,26 @@ export class Receiver {
     if (this.activeGeneration !== this.generation || this.state === 'disconnected')
       throw new Error('Operation was stopped');
   }
-  private async call(name: string, ...args: number[]): Promise<number> {
-    this.check();
-    if (!this.tuner) throw new Error('Tuner is not initialized');
-    this.tuner.ioError = undefined;
-    const result = await this.tuner.ccall(
-      name,
-      'number',
-      args.map(() => 'number'),
-      args,
-      { async: true },
-    );
-    this.check();
-    if (result < 0) throw this.tuner.ioError ?? new Error(`${name} failed (${result})`);
-    return result;
+  // ASYNCIFY allows one in-flight export per module; the main and auxiliary
+  // receivers share it, so every call is queued.
+  private call(name: string, ...args: number[]): Promise<number> {
+    const operation = this.callQueue.then(async () => {
+      this.check();
+      if (!this.tuner) throw new Error('Tuner is not initialized');
+      this.tuner.ioError = undefined;
+      const result = await this.tuner.ccall(
+        name,
+        'number',
+        args.map(() => 'number'),
+        args,
+        { async: true },
+      );
+      this.check();
+      if (result < 0) throw this.tuner.ioError ?? new Error(`${name} failed (${result})`);
+      return result;
+    });
+    this.callQueue = operation.catch(() => {});
+    return operation;
   }
 
   private run<T>(operation: () => Promise<T>): Promise<T> {
@@ -238,6 +245,64 @@ export class Receiver {
       this.check();
       this.update('streaming', `Receiving index ${this.receiverIndex} TS`);
     });
+  }
+
+  /** PX4/PX5 boards carry a second tuner pair (S1/T1) usable beside the main one. */
+  get hasAuxiliary(): boolean {
+    return this.bridge.family === 'px4';
+  }
+
+  /** TS tag of the auxiliary tuner for a channel: S1 = 1, T1 = 3. */
+  static auxiliaryIndex(channel: Channel): number {
+    return parseChannel(channel).band === 'T' ? 3 : 1;
+  }
+
+  /**
+   * Tune the auxiliary tuner and enable its TS output. Failures never touch the
+   * main receiver state; a lock failure resolves false.
+   */
+  async auxiliaryTune(channel: Channel, demodTimeoutMs = 3000): Promise<boolean> {
+    const { frequencyKHz, band, slot } = parseChannel(channel);
+    if (!this.hasAuxiliary) throw new Error('No auxiliary tuner on this device');
+    // A main-tuner operation in flight is fine: module calls are queued.
+    if (!['ready', 'tuning', 'locked', 'streaming'].includes(this.state))
+      throw new Error('Initialize first');
+    await this.call('aux_frequency', frequencyKHz);
+    const pllDeadline = performance.now() + 500;
+    let pllLocked = false;
+    while (!(pllLocked = !!(await this.call('aux_pll'))) && performance.now() < pllDeadline)
+      await sleep(20);
+    if (!pllLocked) return false;
+    await this.call('aux_acquire');
+    const deadline = performance.now() + demodTimeoutMs;
+    while (!(await this.call('aux_lock'))) {
+      if (performance.now() >= deadline) return false;
+      await sleep(20);
+    }
+    if (band !== 'T') {
+      const tsidDeadline = performance.now() + 1000;
+      let tsid = 0;
+      do {
+        tsid = await this.call('aux_tsid', slot);
+        if (tsid && tsid !== 0xffff) break;
+        await sleep(10);
+      } while (performance.now() < tsidDeadline);
+      if (!tsid || tsid === 0xffff) return false;
+      await this.call('aux_select_tsid', tsid);
+      const selectDeadline = performance.now() + 1000;
+      while ((await this.call('aux_current_tsid')) !== tsid) {
+        if (performance.now() >= selectDeadline) return false;
+        await sleep(10);
+      }
+    }
+    await this.call('aux_capture');
+    return true;
+  }
+
+  /** Put the auxiliary tuner back to sleep. */
+  async auxiliaryStop(): Promise<void> {
+    if (this.tuner && ['ready', 'tuning', 'locked', 'streaming'].includes(this.state))
+      await this.call('aux_stop');
   }
 
   stop(): Promise<void> {

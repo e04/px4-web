@@ -14,6 +14,9 @@ import type { Channel } from '../channels';
 export class ReceiverSession {
   private closing?: Promise<void>;
   private worker?: TransportWorker;
+  // Auxiliary tuner demux; rebuilt per EPG channel so no PSI crosses multiplexes.
+  private epgWorker?: TransportWorker;
+  epgTransport?: TransportSnapshot;
   private stream?: UsbTsStream;
   card?: T1Card;
   b25?: B25Worker;
@@ -169,6 +172,8 @@ export class ReceiverSession {
       .run((bytes) => {
         if (this.closing || epoch !== this.epoch || this.worker !== worker)
           return Promise.resolve();
+        // Best effort: an overloaded EPG demux drops chunks instead of stalling playback.
+        this.epgWorker?.request('chunk', bytes.slice(0)).catch(() => {});
         return worker.request('chunk', bytes);
       })
       .catch((error) => {
@@ -205,6 +210,39 @@ export class ReceiverSession {
       }
     }
   }
+  /** A free tuner beside the main one exists (PX4/PX5 second tuner pair). */
+  get hasEpgTuner(): boolean {
+    return this.receiver.hasAuxiliary;
+  }
+
+  /**
+   * Tune the auxiliary tuner for EPG collection. Its packets share the main
+   * USB stream, so data only arrives while the main tuner is receiving.
+   */
+  async epgTune(channel: Channel): Promise<boolean> {
+    this.epgWorker?.close();
+    this.epgWorker = undefined;
+    this.epgTransport = undefined;
+    if (this.closing) throw new Error('Session closed');
+    if (!(await this.receiver.auxiliaryTune(channel)) || this.closing) return false;
+    this.epgWorker = new TransportWorker(undefined, Receiver.auxiliaryIndex(channel));
+    return true;
+  }
+
+  async refreshEpgTransport(): Promise<void> {
+    const worker = this.epgWorker;
+    if (!worker || this.closing) return;
+    const reply = await worker.request('snapshot');
+    if (this.epgWorker === worker) this.epgTransport = reply.snapshot;
+  }
+
+  async stopEpgTuner(): Promise<void> {
+    this.epgWorker?.close();
+    this.epgWorker = undefined;
+    this.epgTransport = undefined;
+    if (!this.closing) await this.receiver.auxiliaryStop();
+  }
+
   private failB25(error: unknown): void {
     if (this.closing) return;
     this.b25Error ??= String(error);
@@ -304,6 +342,8 @@ export class ReceiverSession {
     this.stream?.stop();
     this.card?.invalidate();
     this.b25?.close();
+    this.epgWorker?.close();
+    this.epgWorker = undefined;
     this.closing = (async () => {
       let first: unknown;
       try {

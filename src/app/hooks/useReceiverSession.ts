@@ -17,6 +17,7 @@ import {
 import { CHANNEL_KEY, saveValue, settingsStore } from '../../storage';
 import { DEFAULT_CHANNEL, SCAN_OPTION, loadChannel, stateLabels } from '../format';
 import { currentChannelProgram, loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
+import { crawlEpg } from '../../epg-crawl';
 import type { ProgramInfo } from '../../transport/program-info';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 
@@ -103,6 +104,11 @@ export function useReceiverSession({
   const [deviceLabel, setDeviceLabel] = useState('');
   const [cardless, setCardless] = useState(false);
   const [b25, setB25] = useState<Record<string, number | boolean | undefined>>();
+  // '' = no free tuner; otherwise what the EPG crawl tuner is doing.
+  const [epgCrawl, setEpgCrawl] = useState('');
+  const scanRef = useRef(scan);
+  scanRef.current = scan;
+  const crawlDoneRef = useRef<Promise<void>>(Promise.resolve());
   const firmwareRef = useRef<FirmwareImage | undefined>(undefined);
 
   // The binary is bundled at build time: fetch once, reuse for the session.
@@ -271,6 +277,50 @@ export function useReceiverSession({
     // The session is intentionally owned for the lifetime of this component.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A free tuner (PX4/PX5 second tuner pair) cycles every receivable channel
+  // for EPG while the main tuner plays. Scans own the device, so crawl pauses.
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!connected || scanning || !session?.hasEpgTuner) return;
+    const controller = new AbortController();
+    const previous = crawlDoneRef.current;
+    setEpgCrawl('Idle');
+    const done = previous.then(() =>
+      crawlEpg(session, {
+        signal: controller.signal,
+        channels: () =>
+          (['T', 'BS', 'CS'] as const)
+            .flatMap(channelsFor)
+            .filter((item) => scanRef.current[String(item)]?.locked),
+        skip: (item) => String(item) === channelRef.current,
+        onChannel: (item) => {
+          if (!controller.signal.aborted) setEpgCrawl(item == null ? 'Idle' : `CH ${item}`);
+        },
+        onPrograms: async (item, programs) => {
+          const key = String(item);
+          // The main tuner now owns this channel's EPG.
+          if (key === channelRef.current) return;
+          const next = mergeEpg(await loadEpg(key), programs);
+          await saveEpg(key, next);
+          setChannelEpg((known) => ({ ...known, [key]: next }));
+        },
+        onError: (item, error) =>
+          addLog(
+            `EPG tuner CH ${item}: ${error instanceof Error ? error.message : String(error)}`,
+            true,
+          ),
+        onRound: (count) => addLog(`EPG crawl round complete (${count} channels)`),
+      }),
+    );
+    crawlDoneRef.current = done.catch(() => {});
+    return () => {
+      controller.abort();
+      setEpgCrawl('');
+    };
+    // Session identity changes always toggle `connected`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, scanning]);
 
   const onReceiverEvent = (event: ReceiverEvent) => {
     const label = stateLabels[event.state] ?? event.state;
@@ -602,6 +652,7 @@ export function useReceiverSession({
     deviceLabel,
     cardless,
     b25,
+    epgCrawl,
     connect,
     changeChannel,
     changeService,

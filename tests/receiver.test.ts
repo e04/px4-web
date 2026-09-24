@@ -113,3 +113,57 @@ it('stops waiting for lock when the demodulator reports no signal', async () => 
   expect(ccall.mock.calls.filter(([name]) => name === 'receiver_lock')).toHaveLength(1);
   expect(receiver.state).toBe('ready');
 });
+
+it('tunes the auxiliary satellite tuner without touching the main receiver state', async () => {
+  vi.useFakeTimers();
+  const { receiver, ccall } = satelliteReceiver();
+  ccall.mockImplementation(async (name: string) =>
+    name === 'aux_tsid' || name === 'aux_current_tsid'
+      ? 0x4010
+      : name === 'aux_pll' || name === 'aux_lock'
+        ? 1
+        : 0,
+  );
+  receiver.state = 'streaming';
+  const tuned = receiver.auxiliaryTune('BS1_2');
+  await vi.runAllTimersAsync();
+  expect(await tuned).toBe(true);
+  expect(receiver.state).toBe('streaming');
+  const names = ccall.mock.calls.map(([name]) => name);
+  expect(names).toEqual([
+    'aux_frequency',
+    'aux_pll',
+    'aux_acquire',
+    'aux_lock',
+    'aux_tsid',
+    'aux_select_tsid',
+    'aux_current_tsid',
+    'aux_capture',
+  ]);
+  expect(Receiver.auxiliaryIndex('BS1_2')).toBe(1);
+  expect(Receiver.auxiliaryIndex(13)).toBe(3);
+});
+
+it('has no auxiliary tuner outside the PX4 family', async () => {
+  const { receiver } = satelliteReceiver('mlt');
+  expect(receiver.hasAuxiliary).toBe(false);
+  await expect(receiver.auxiliaryTune(13)).rejects.toThrow('No auxiliary tuner');
+});
+
+it('serializes tuner module calls across main and auxiliary receivers', async () => {
+  let active = 0;
+  let overlap = false;
+  const ccall = vi.fn(async (name: string) => {
+    overlap ||= active > 0;
+    active++;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    active--;
+    return name === 'aux_pll' || name === 'aux_lock' || name.startsWith('receiver_') ? 1 : 0;
+  });
+  const bridge = { family: 'px4', power: vi.fn(async () => {}) } as unknown as It930xBridge;
+  const receiver = new Receiver(bridge, 512);
+  receiver.state = 'streaming';
+  (receiver as unknown as { tuner: unknown }).tuner = { ccall };
+  await Promise.all([receiver.tune(20), receiver.auxiliaryTune(13)]);
+  expect(overlap).toBe(false);
+});

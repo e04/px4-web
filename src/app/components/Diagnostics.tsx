@@ -194,6 +194,7 @@ interface MetricsGridProps {
   deviceLabel: string;
   cardless: boolean;
   b25: Record<string, number | boolean | undefined> | undefined;
+  epgCrawl: string;
   status: string;
 }
 
@@ -204,6 +205,7 @@ export function MetricsGrid({
   deviceLabel,
   cardless,
   b25,
+  epgCrawl,
   status,
 }: MetricsGridProps) {
   const metrics: [string, string][] = [
@@ -219,6 +221,7 @@ export function MetricsGrid({
     ['Resyncs', playback?.resyncs.toLocaleString() ?? '—'],
     ['Device', deviceLabel || '—'],
     ['Card', cardless ? 'No reader' : b25?.cardReady ? 'Ready' : '—'],
+    ['EPG tuner', epgCrawl || '—'],
   ];
   return (
     <Paper bg="dark.9" p="md">

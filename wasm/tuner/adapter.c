@@ -37,6 +37,9 @@ static int model;
 static struct device device;
 static struct cxd2856er_demod sony_demod;
 static struct cxd2858er_tuner sony_tuner;
+// Auxiliary PX4 receiver state: 0 closed, 1 terrestrial (T1), 2 satellite (S1).
+static int aux_mode;
+static int aux_sleep(void);
 #define CHECK(call) do { int ret = (call); if (ret) return ret; } while (0)
 
 static int sony_init(void) {
@@ -74,6 +77,7 @@ EMSCRIPTEN_KEEPALIVE int receiver_init(int device_model) {
   const u8 addresses[] = {0x11, 0x13, 0x10, 0x12};
   ready = false;
   is_satellite = false;
+  aux_mode = 0;
   if (model == 3) return sony_init();
   memset(demods, 0, sizeof(demods));
   memset(terrestrial, 0, sizeof(terrestrial));
@@ -267,8 +271,10 @@ EMSCRIPTEN_KEEPALIVE int receiver_stop(void) {
     return ret ? ret : next;
   }
   // Attempt every shutdown step, preserving the first error.
-  int ret = tc90522_enable_ts_pins_t(&demods[2], false);
-  int next = r850_sleep(&terrestrial[0]);
+  int ret = aux_sleep();
+  int next = tc90522_enable_ts_pins_t(&demods[2], false);
+  if (!ret) ret = next;
+  next = r850_sleep(&terrestrial[0]);
   if (!ret) ret = next;
   next = tc90522_sleep_t(&demods[2], true);
   if (!ret) ret = next;
@@ -278,4 +284,116 @@ EMSCRIPTEN_KEEPALIVE int receiver_stop(void) {
   if (!ret) ret = next;
   next = tc90522_sleep_s(&demods[0], true);
   return ret ? ret : next;
+}
+
+// Auxiliary receiver on PX4/PX5 boards: the second tuner pair (S1: demods[1], T1: demods[3]),
+// tagged as receiver 1/3 in the shared TS stream. Sequences follow px4_chrdev_open/tune_t/tune_s.
+static int aux_sleep(void) {
+  int ret = 0;
+  if (aux_mode == 1) {
+    ret = tc90522_enable_ts_pins_t(&demods[3], false);
+    int next = r850_sleep(&terrestrial[1]);
+    if (!ret) ret = next;
+    next = tc90522_sleep_t(&demods[3], true);
+    if (!ret) ret = next;
+  } else if (aux_mode == 2) {
+    ret = tc90522_enable_ts_pins_s(&demods[1], false);
+    int next = rt710_sleep(&satellite[1]);
+    if (!ret) ret = next;
+    next = tc90522_sleep_s(&demods[1], true);
+    if (!ret) ret = next;
+  }
+  aux_mode = 0;
+  return ret;
+}
+static int aux_wakeup(int mode) {
+  if (aux_mode == mode) return 0;
+  CHECK(aux_sleep());
+  struct tc90522_demod *d = &demods[mode == 1 ? 3 : 1];
+  if (mode == 1) {
+    const u8 regs[][2] = {
+      {0xb0,0xa0},{0xb2,0x3d},{0xb3,0x25},{0xb4,0x8b},{0xb5,0x4b},
+      {0xb6,0x3f},{0xb7,0xff},{0xb8,0xc0},{0x1f,0},{0x75,0}
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(regs); i++) CHECK(tc90522_write_reg(d, regs[i][0], regs[i][1]));
+    CHECK(tc90522_enable_ts_pins_t(d, false));
+    CHECK(tc90522_sleep_t(d, false));
+    CHECK(r850_wakeup(&terrestrial[1]));
+    struct r850_system_config sys = {R850_SYSTEM_ISDB_T, R850_BANDWIDTH_6M, 4063};
+    CHECK(r850_set_system(&terrestrial[1], &sys));
+  } else {
+    CHECK(tc90522_write_reg(d, 0x15, 0));
+    CHECK(tc90522_write_reg(d, 0x1d, 0));
+    CHECK(tc90522_write_reg(d, 0x04, 2));
+    CHECK(tc90522_enable_ts_pins_s(d, false));
+    CHECK(tc90522_sleep_s(d, false));
+  }
+  aux_mode = mode;
+  return 0;
+}
+EMSCRIPTEN_KEEPALIVE int aux_frequency(int khz) {
+  if (!ready || model != 0 || !((khz >= 473143 && khz <= 767143) || (khz >= 1049480 && khz <= 2053000))) return -EINVAL;
+  int mode = khz >= 1049480 ? 2 : 1;
+  CHECK(aux_wakeup(mode));
+  if (mode == 2) {
+    struct tc90522_demod *d = &demods[1];
+    CHECK(tc90522_enable_ts_pins_s(d, false));
+    CHECK(tc90522_set_agc_s(d, false));
+    CHECK(tc90522_write_reg(d, 0x8e, 0x06));
+    CHECK(tc90522_write_reg(d, 0xa3, 0xf7));
+    return rt710_set_params(&satellite[1], khz, 28860, 4);
+  }
+  struct tc90522_demod *d = &demods[3];
+  CHECK(tc90522_enable_ts_pins_t(d, false));
+  CHECK(tc90522_write_reg(d, 0x47, 0x30));
+  CHECK(tc90522_set_agc_t(d, false));
+  CHECK(tc90522_write_reg(d, 0x76, 0x0c));
+  return r850_set_frequency(&terrestrial[1], khz);
+}
+EMSCRIPTEN_KEEPALIVE int aux_pll(void) {
+  if (!ready || !aux_mode) return -EINVAL;
+  bool locked = false;
+  if (aux_mode == 2) CHECK(rt710_is_pll_locked(&satellite[1], &locked));
+  else CHECK(r850_is_pll_locked(&terrestrial[1], &locked));
+  return locked;
+}
+EMSCRIPTEN_KEEPALIVE int aux_acquire(void) {
+  if (!ready || !aux_mode) return -EINVAL;
+  if (aux_mode == 2) return tc90522_set_agc_s(&demods[1], true);
+  struct tc90522_demod *d = &demods[3];
+  CHECK(tc90522_set_agc_t(d, true));
+  CHECK(tc90522_write_reg(d, 0x71, 0x21));
+  CHECK(tc90522_write_reg(d, 0x72, 0x25));
+  return tc90522_write_reg(d, 0x75, 0x08);
+}
+EMSCRIPTEN_KEEPALIVE int aux_lock(void) {
+  if (!ready || !aux_mode) return -EINVAL;
+  bool locked = false;
+  if (aux_mode == 2) CHECK(tc90522_is_signal_locked_s(&demods[1], &locked));
+  else CHECK(tc90522_is_signal_locked_t(&demods[3], &locked));
+  return locked;
+}
+EMSCRIPTEN_KEEPALIVE int aux_tsid(int slot) {
+  if (!ready || aux_mode != 2 || slot < 0 || slot >= 12) return -EINVAL;
+  u16 tsid = 0;
+  CHECK(tc90522_tmcc_get_tsid_s(&demods[1], slot, &tsid));
+  return tsid;
+}
+EMSCRIPTEN_KEEPALIVE int aux_select_tsid(int tsid) {
+  if (!ready || aux_mode != 2 || tsid <= 0 || tsid >= 65535) return -EINVAL;
+  return tc90522_set_tsid_s(&demods[1], tsid);
+}
+EMSCRIPTEN_KEEPALIVE int aux_current_tsid(void) {
+  if (!ready || aux_mode != 2) return -EINVAL;
+  u16 tsid = 0;
+  CHECK(tc90522_get_tsid_s(&demods[1], &tsid));
+  return tsid;
+}
+EMSCRIPTEN_KEEPALIVE int aux_capture(void) {
+  if (!ready || !aux_mode) return -EINVAL;
+  return aux_mode == 2 ? tc90522_enable_ts_pins_s(&demods[1], true) : tc90522_enable_ts_pins_t(&demods[3], true);
+}
+EMSCRIPTEN_KEEPALIVE int aux_stop(void) {
+  if (!ready) return 0;
+  return aux_sleep();
 }
