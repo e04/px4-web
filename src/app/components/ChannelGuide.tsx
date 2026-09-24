@@ -137,6 +137,7 @@ export function ChannelGuide({
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const stationsRef = useRef<HTMLDivElement>(null);
+  const hoursRef = useRef<HTMLDivElement>(null);
   const [cullX, setCullX] = useState(0);
   const [cullY, setCullY] = useState(0);
   const rangeX = [(cullX - 1) * CULL_STEP, (cullX + 2) * CULL_STEP + window.innerWidth] as const;
@@ -234,6 +235,15 @@ export function ChannelGuide({
           </Button>
         )}
       </Group>
+      {/* Hour labels stay above the vertical scroller and follow the timeline's horizontal scroll. */}
+      <Box px="md" mb={ROW_GAP} style={{ display: 'flex' }}>
+        <Box w={STATION_WIDTH + ROW_GAP} style={{ flex: 'none' }} />
+        <Box ref={hoursRef} h={HOURS_HEIGHT} style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          <Box w={24 * HOUR_WIDTH}>
+            <TimelineHours firstHour={firstHour} hourWidth={HOUR_WIDTH} />
+          </Box>
+        </Box>
+      </Box>
       <Box
         ref={listRef}
         className="program-schedule"
@@ -249,7 +259,6 @@ export function ChannelGuide({
             ref={stationsRef}
             gap={0}
             w={STATION_WIDTH}
-            pt={HOURS_HEIGHT + ROW_GAP}
             style={{ flex: 'none' }}
           >
             {rows.map(({ option }, index) => {
@@ -314,31 +323,50 @@ export function ChannelGuide({
           <Box
             className="program-schedule"
             ml={ROW_GAP}
-            style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}
-            onScroll={(event) => setCullX(Math.floor(event.currentTarget.scrollLeft / CULL_STEP))}
+            style={{ flex: 1, minWidth: 0, overflowX: 'auto', cursor: 'grab' }}
+            onPointerDown={(event) => {
+              // Touch scrolls natively; drag-to-scroll is for the mouse.
+              if (event.pointerType !== 'mouse' || event.button !== 0) return;
+              const timeline = event.currentTarget;
+              const list = listRef.current;
+              const origin = {
+                x: event.clientX,
+                y: event.clientY,
+                left: timeline.scrollLeft,
+                top: list?.scrollTop ?? 0,
+              };
+              event.preventDefault();
+              timeline.setPointerCapture(event.pointerId);
+              timeline.style.cursor = 'grabbing';
+              const onMove = (move: PointerEvent) => {
+                timeline.scrollLeft = origin.left - (move.clientX - origin.x);
+                if (list) list.scrollTop = origin.top - (move.clientY - origin.y);
+              };
+              const onEnd = () => {
+                timeline.style.cursor = 'grab';
+                timeline.removeEventListener('pointermove', onMove);
+                timeline.removeEventListener('pointerup', onEnd);
+                timeline.removeEventListener('pointercancel', onEnd);
+              };
+              timeline.addEventListener('pointermove', onMove);
+              timeline.addEventListener('pointerup', onEnd);
+              timeline.addEventListener('pointercancel', onEnd);
+            }}
+            onScroll={(event) => {
+              const { scrollLeft } = event.currentTarget;
+              if (hoursRef.current) hoursRef.current.scrollLeft = scrollLeft;
+              setCullX(Math.floor(scrollLeft / CULL_STEP));
+            }}
           >
             <Stack gap={0} w={24 * HOUR_WIDTH}>
-              <Box h={HOURS_HEIGHT} mb={ROW_GAP}>
-                <TimelineHours firstHour={firstHour} hourWidth={HOUR_WIDTH} />
-              </Box>
               {rows.map(({ option, events }, index) => {
-                const top = HOURS_HEIGHT + ROW_GAP + index * (ROW_HEIGHT + ROW_OVERLAP);
+                const top = index * (ROW_HEIGHT + ROW_OVERLAP);
                 const shown = top + ROW_HEIGHT > rangeY[0] && top < rangeY[1];
                 return (
                   <Box
                     key={option.value}
                     mt={index ? ROW_OVERLAP : 0}
                     pos="relative"
-                    style={{ cursor: busy ? undefined : 'pointer' }}
-                    {...hover(option.value)}
-                    // A program in a sub-service lane tunes that service.
-                    onClick={(event) => {
-                      if (busy) return;
-                      const lane = (event.target as HTMLElement).closest<HTMLElement>(
-                        '[data-service]',
-                      );
-                      select(option, lane ? Number(lane.dataset.service) : option.serviceId);
-                    }}
                   >
                     <TimelineTrack
                       events={shown ? events : NO_EVENTS}
