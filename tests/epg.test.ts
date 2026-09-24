@@ -10,13 +10,13 @@ import type { ProgramEvent, ProgramInfo } from '../src/transport/program-info';
 
 describe('EPG merge', () => {
   it('selects only a program airing now for a channel service', () => {
-    const event: ProgramEvent = { id: 1, title: 'On air', description: '', start: 100, end: 200 };
+    const event: ProgramEvent = { id: 1, title: 'On air', description: '', genres: [], start: 100, end: 200 };
     expect(currentChannelProgram({ 10: [event] }, [10], 150)?.title).toBe('On air');
     expect(currentChannelProgram({ 10: [event] }, [10], 200)).toBeUndefined();
     expect(currentChannelProgram({ 10: [event] }, [11], 150)).toBeUndefined();
   });
   it('retains unreceived future programs and updates matching events', () => {
-    const event: ProgramEvent = { id: 1, title: 'Old', description: '', start: 200, end: 300 };
+    const event: ProgramEvent = { id: 1, title: 'Old', description: '', genres: [], start: 200, end: 300 };
     const program: ProgramInfo = {
       serviceId: 10,
       stationName: '',
@@ -24,7 +24,7 @@ describe('EPG merge', () => {
       next: null,
       future: [
         { ...event, title: 'Updated' },
-        { id: 2, title: 'Later', description: '', start: 400, end: 500 },
+        { id: 2, title: 'Later', description: '', genres: [], start: 400, end: 500 },
       ],
     };
     expect(mergeEpg({ 10: [event], 11: [{ ...event, id: 3 }] }, { 10: program }, 100)).toEqual({
@@ -33,7 +33,7 @@ describe('EPG merge', () => {
     });
   });
   it('keeps the known current title while live EIT temporarily lacks it', () => {
-    const event: ProgramEvent = { id: 1, title: 'On air', description: '', start: 100, end: 200 };
+    const event: ProgramEvent = { id: 1, title: 'On air', description: '', genres: [], start: 100, end: 200 };
     const blank = { ...event, title: '' };
     const epg = { 10: [event] };
     expect(currentServiceProgram(null, epg, 10, 150)).toEqual(event);
@@ -52,7 +52,7 @@ describe('EPG merge', () => {
 describe('24-hour program timeline', () => {
   it('positions programs at 100px/hour, clips the window, and deduplicates live EIT', () => {
     const hour = 3600000;
-    const event: ProgramEvent = { id: 1, title: 'Now', description: '', start: -hour, end: hour };
+    const event: ProgramEvent = { id: 1, title: 'Now', description: '', genres: [], start: -hour, end: hour };
     const later: ProgramEvent = {
       id: 2,
       title: 'Later',
@@ -82,6 +82,7 @@ describe('rescheduled programs', () => {
     id,
     title,
     description: '',
+    genres: [],
     start: start * min,
     end: end * min,
   });

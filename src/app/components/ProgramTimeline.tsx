@@ -13,6 +13,27 @@ const timelineClock = new Intl.DateTimeFormat('ja-JP', {
   minute: '2-digit',
 });
 
+// ARIB STD-B10 content_nibble_level_1 → muted pastel for the dark theme.
+const GENRE_COLORS = [
+  '#9fb8d9', // 0x0 ニュース／報道
+  '#9fd4b0', // 0x1 スポーツ
+  '#d9d09f', // 0x2 情報／ワイドショー
+  '#d9a3a3', // 0x3 ドラマ
+  '#c7a8d9', // 0x4 音楽
+  '#e0bc96', // 0x5 バラエティ
+  '#a8a8d9', // 0x6 映画
+  '#e0a8c8', // 0x7 アニメ／特撮
+  '#9fd0d0', // 0x8 ドキュメンタリー／教養
+  '#c9b8a0', // 0x9 劇場／公演
+  '#b8d49f', // 0xA 趣味／教育
+  '#a8c0c8', // 0xB 福祉
+];
+
+function genreColor(event: ProgramEvent) {
+  const genre = event.genres.find((item) => item.level1 < GENRE_COLORS.length);
+  return genre && GENRE_COLORS[genre.level1];
+}
+
 export function timelineStart(now: number) {
   return Math.floor(now / 3600000) * 3600000;
 }
@@ -79,6 +100,9 @@ export const TimelineTrack = memo(function TimelineTrack({
           target={targetRef}
           multiline
           w={300}
+          color="dark.7"
+          withArrow
+          c="white"
           portalProps={portalTarget ? { target: portalTarget } : undefined}
           label={
             <Stack gap={2}>
@@ -141,6 +165,8 @@ export const TimelineTrack = memo(function TimelineTrack({
                   Math.abs(left - (events[index - 1]!.left + events[index - 1]!.width)) < 0.5)
                   ? 'none'
                   : undefined,
+              // Drawn inside the cell so it survives the shared-edge border removal.
+              boxShadow: genreColor(event) && `inset 1px 0 0 ${genreColor(event)}`,
             }}
           >
             <div className="timeline-event-title">{event.title || '—'}</div>

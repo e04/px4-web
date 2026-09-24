@@ -9,6 +9,8 @@ export interface ProgramEvent {
   id: number;
   title: string;
   description: string;
+  /** EIT content_descriptor nibbles (ARIB STD-B10 genre table). */
+  genres: { level1: number; level2: number }[];
   start: number | null;
   end: number | null;
 }
@@ -68,6 +70,7 @@ function eventInfo(event: EventInformation | undefined): ProgramEvent | null {
   const short =
     event.descriptors.find((d) => d.tag === 'shortEvent' && d.iso639LanguageCode === JAPANESE) ??
     event.descriptors.find((d) => d.tag === 'shortEvent');
+  const content = event.descriptors.find((d) => d.tag === 'content');
   const time = event.startTime;
   const clock = time == null ? null : bcdDuration(time % 0x1000000);
   // ARIB MJD + BCD carries Japan local time, independent of the browser timezone.
@@ -80,6 +83,10 @@ function eventInfo(event: EventInformation | undefined): ProgramEvent | null {
     id: event.eventId,
     title: short && short.tag === 'shortEvent' ? text(short.eventName) : '',
     description: short && short.tag === 'shortEvent' ? text(short.text) : '',
+    genres:
+      content?.tag === 'content'
+        ? content.items.map((item) => ({ level1: item.contentNibbleLevel1, level2: item.contentNibbleLevel2 }))
+        : [],
     start,
     end: start != null && length != null ? start + length : null,
   };

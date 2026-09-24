@@ -15,7 +15,7 @@ function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): Prog
     const known = byId.get(event.id);
     byId.set(
       event.id,
-      !event.title && known?.title ? { ...event, title: known.title, description: known.description } : event,
+      !event.title && known?.title ? { ...event, title: known.title, description: known.description, genres: event.genres.length ? event.genres : known.genres } : event,
     );
   }
   return [...byId.values()];

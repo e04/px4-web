@@ -188,7 +188,7 @@ describe('scanChannels', () => {
       13: { locked: true, services: [{ serviceId: 1, stationName: '' }] },
     });
     const refresh = session.refreshTransport.bind(session);
-    const event = { id: 1, title: 'Now', description: '', start: 100, end: 200 };
+    const event = { id: 1, title: 'Now', description: '', genres: [], start: 100, end: 200 };
     let calls = 0;
     session.refreshTransport = async () => {
       await refresh();
@@ -241,7 +241,7 @@ describe('scanChannels', () => {
       13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] },
     });
     const refresh = session.refreshTransport.bind(session);
-    const event = { id: 1, title: 'Now', description: '', start: 100, end: 200 };
+    const event = { id: 1, title: 'Now', description: '', genres: [], start: 100, end: 200 };
     let calls = 0;
     session.refreshTransport = async () => {
       await refresh();
