@@ -64,12 +64,12 @@ it('orders frames by timestamp and closes the oldest beyond the queue bound', ()
   vi.stubGlobal('Worker', MockWorker);
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
   const player = new FullSegPlayer({} as HTMLCanvasElement, true);
-  const frames = Array.from({ length: 26 }, (_, i) => ({
+  const frames = Array.from({ length: 92 }, (_, i) => ({
     timestamp: (i ^ 1) * 33367,
     close: vi.fn(),
   }));
   for (const frame of frames) MockWorker.current.reply({ type: 'video', frame });
-  expect(player.snapshot.videoQueued).toBe(24);
+  expect(player.snapshot.videoQueued).toBe(90);
   expect(player.snapshot.dropped).toBe(2);
   // Timestamps 0 and 1 (arriving swapped, as reordered B-frames can) are the ones evicted.
   expect(frames[0].close).toHaveBeenCalledOnce();

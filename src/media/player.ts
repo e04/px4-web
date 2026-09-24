@@ -3,7 +3,8 @@ import type { CaptionPacket, PlaybackStats } from './playback-types';
 import { microsecondsToPts } from './video-frame';
 import { createVideoRenderer, type VideoRenderer } from './video-renderer';
 
-const MAX_QUEUED_FRAMES = 24;
+// Covers the audio ahead of video plus Bluetooth output latency; fewer evicts frames before they are due.
+const MAX_QUEUED_FRAMES = 90;
 
 interface Clock {
   pts?: number;
@@ -60,7 +61,7 @@ export class FullSegPlayer {
     if (clock?.pts === undefined || !this.context) return undefined;
     const latency = this.context.outputLatency || this.context.baseLatency || 0;
     const elapsed = clock.running
-      ? Math.max(-0.1, Math.min(0.05, this.context.currentTime - clock.contextTime - latency))
+      ? Math.max(-0.1, Math.min(0.05, this.context.currentTime - clock.contextTime)) - latency
       : 0;
     return (clock.pts + elapsed * 90000) / 90000;
   }
@@ -255,7 +256,7 @@ export class FullSegPlayer {
     if (clock?.pts !== undefined && this.context) {
       const latency = this.context.outputLatency || this.context.baseLatency || 0;
       const elapsed = clock.running
-        ? Math.max(-0.1, Math.min(0.05, this.context.currentTime - clock.contextTime - latency))
+        ? Math.max(-0.1, Math.min(0.05, this.context.currentTime - clock.contextTime)) - latency
         : 0;
       const pts = clock.pts + elapsed * 90000;
       const now = performance.now();
