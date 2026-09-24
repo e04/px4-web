@@ -2,20 +2,35 @@ import type { ProgramEvent, ProgramInfo } from './transport/program-info';
 import { epgStore, loadValue, saveValue } from './storage';
 
 export type EpgMap = Record<number, ProgramEvent[]>;
+
+/**
+ * One entry per event_id; later entries are newer. A broadcaster reschedule keeps the
+ * event_id but moves start/end, so the newest timing wins. Text is kept from an older
+ * copy while the newer one arrives without a short event descriptor.
+ */
+function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): ProgramEvent[] {
+  const byId = new Map<number, ProgramEvent>();
+  for (const event of events) {
+    if (!event) continue;
+    const known = byId.get(event.id);
+    byId.set(
+      event.id,
+      !event.title && known?.title ? { ...event, title: known.title, description: known.description } : event,
+    );
+  }
+  return [...byId.values()];
+}
+
+const overlaps = (a: ProgramEvent, b: ProgramEvent) => a.start! < b.end! && b.start! < a.end!;
+
 export function timelineEvents(events: (ProgramEvent | null)[], now: number, start = now) {
   const end = start + 24 * 3600000;
-  const unique = new Map<string, ProgramEvent>();
-  for (const event of events)
-    if (
-      event?.start != null &&
-      event.end != null &&
-      event.end > now &&
-      event.start < end &&
-      event.end > event.start
-    )
-      if (event.title || !unique.get(`${event.id}:${event.start}`)?.title)
-        unique.set(`${event.id}:${event.start}`, event);
-  return [...unique.values()]
+  return collapseEvents(
+    events.filter(
+      (event) =>
+        event?.start != null && event.end != null && event.end > now && event.start < end && event.end > event.start,
+    ),
+  )
     .sort((a, b) => a.start! - b.start!)
     .map((event) => ({
       event,
@@ -48,14 +63,15 @@ function validEvent(value: unknown): value is ProgramEvent {
 export function mergeEpg(existing: EpgMap, programs: Record<number, ProgramInfo>, now = Date.now()): EpgMap {
   const result: EpgMap = {};
   for (const [id, program] of Object.entries(programs)) {
-    const events = new Map<string, ProgramEvent>();
-    for (const event of [...(existing[Number(id)] ?? []), ...program.future, program.current, program.next]) {
-      if (validEvent(event) && event.end! > now) {
-        const id = `${event.id}:${event.start}`;
-        if (event.title || !events.get(id)?.title) events.set(id, event);
-      }
-    }
-    if (events.size) result[Number(id)] = [...events.values()].sort((a, b) => a.start! - b.start!);
+    const valid = (event: ProgramEvent | null): event is ProgramEvent => validEvent(event) && event.end! > now;
+    const received = collapseEvents([...program.future, program.current, program.next].filter(valid));
+    const receivedIds = new Set(received.map((event) => event.id));
+    // Stored events superseded by a reschedule: a different event now occupies their slot.
+    const stored = (existing[Number(id)] ?? []).filter(
+      (event) => valid(event) && (receivedIds.has(event.id) || !received.some((next) => overlaps(event, next))),
+    );
+    const events = collapseEvents([...stored, ...received]);
+    if (events.length) result[Number(id)] = events.sort((a, b) => a.start! - b.start!);
   }
   // Preserve services that have not sent SI in this reception window.
   for (const [id, events] of Object.entries(existing))

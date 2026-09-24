@@ -48,3 +48,25 @@ describe('24-hour program timeline', () => {
     ]);
   });
 });
+
+describe('rescheduled programs', () => {
+  const min = 60000;
+  const ev = (id: number, title: string, start: number, end: number): ProgramEvent => ({
+    id, title, description: '', start: start * min, end: end * min,
+  });
+  const info = (future: ProgramEvent[]): ProgramInfo => ({ serviceId: 10, stationName: '', current: null, next: null, future });
+
+  it('moves an event to its new time instead of keeping both copies', () => {
+    const stored = [ev(1, 'A', 0, 54), ev(2, 'B', 54, 60), ev(3, 'C', 60, 75), ev(4, 'D', 75, 85)];
+    // Everything slides 5 minutes; D (4) was dropped and C now runs until 85.
+    const shifted = [ev(1, 'A', 5, 59), ev(2, '', 59, 65), ev(3, 'C', 65, 85)];
+    expect(mergeEpg({ 10: stored }, { 10: info(shifted) }, 0)[10]).toEqual([
+      ev(1, 'A', 5, 59), ev(2, 'B', 59, 65), ev(3, 'C', 65, 85),
+    ]);
+  });
+
+  it('shows one block per event on the timeline', () => {
+    const events = timelineEvents([ev(1, 'A', 0, 54), ev(1, 'A', 5, 59)], 0);
+    expect(events.map((item) => item.event.start)).toEqual([5 * min]);
+  });
+});
