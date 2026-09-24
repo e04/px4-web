@@ -1,6 +1,7 @@
 import workletUrl from './audio-worklet.ts?worker&url';
 import type { CaptionPacket, PlaybackStats } from './playback-types';
 import { microsecondsToPts } from './video-frame';
+import { createVideoRenderer, type VideoRenderer } from './video-renderer';
 
 const MAX_QUEUED_FRAMES = 24;
 
@@ -22,7 +23,7 @@ export class FullSegPlayer {
   private volumeLevel = 1;
   private analyser?: AnalyserNode;
   private meter = new Float32Array(256);
-  private surface?: CanvasRenderingContext2D;
+  private renderer?: VideoRenderer;
   /** Decoded frames sorted by presentation time; every frame leaving the queue must be closed. */
   private frames: VideoFrame[] = [];
   private lastClockSync = 0;
@@ -158,14 +159,29 @@ export class FullSegPlayer {
     for (const frame of this.frames) frame.close();
     this.frames = [];
   }
-  /** The browser converts YUV→RGB from the frame's colorSpace and scales to its display size. */
+  /**
+   * The browser converts YUV→RGB from the frame's colorSpace. The backing store matches the
+   * on-screen device pixels so the one resample is the renderer's Lanczos filter, not the
+   * compositor's bilinear CSS scaling (which aliases when shrinking 1080 lines).
+   */
   private present(frame: VideoFrame): void {
     const canvas = this.canvas;
-    if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-      canvas.width = frame.displayWidth;
-      canvas.height = frame.displayHeight;
+    const aspect = frame.displayWidth / frame.displayHeight;
+    // The canvas may live in the PiP window or be detached (preview popup before adoption).
+    const ratio = canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    const boxWidth = canvas.clientWidth * ratio;
+    const boxHeight = canvas.clientHeight * ratio;
+    let width = frame.displayWidth;
+    let height = frame.displayHeight;
+    if (boxWidth && boxHeight) {
+      width = Math.round(Math.min(boxWidth, boxHeight * aspect));
+      height = Math.round(width / aspect);
     }
-    this.surface!.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    this.renderer!.draw(frame, width, height);
   }
   get volume(): number {
     return this.volumeLevel;
@@ -181,10 +197,7 @@ export class FullSegPlayer {
       throw new Error('Service ID must be an integer from 1 to 65535');
     try {
       if (!this.benchmark) {
-        const surface = this.canvas.getContext('2d', { alpha: false });
-        if (!surface) throw new Error('Canvas 2D is required for video output');
-        surface.imageSmoothingQuality = 'high';
-        this.surface = surface;
+        this.renderer = createVideoRenderer(this.canvas);
         // Called directly from the click handler before awaiting module loading.
         const context = (this.context = new AudioContext({
           sampleRate: 48000,
@@ -354,6 +367,7 @@ export class FullSegPlayer {
     this.worker.terminate();
     cancelAnimationFrame(this.animation);
     this.clearFrames();
+    this.renderer?.dispose();
     this.audio?.disconnect();
     this.audio?.port.close();
     this.gain?.disconnect();
