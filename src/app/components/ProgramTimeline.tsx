@@ -6,7 +6,6 @@ import { schedule } from '../format';
 
 /** Default timeline scale: 100 px per hour over 24 hours. */
 export const HOUR_WIDTH = 100;
-export const TIMELINE_WIDTH = 24 * HOUR_WIDTH;
 
 const timelineClock = new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo',

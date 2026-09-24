@@ -88,7 +88,7 @@ export function VideoStage({
       >
         {busy && (
           <Progress
-          color='gray'
+            color="gray"
             value={100}
             striped
             animated
@@ -205,8 +205,15 @@ export function VideoStage({
               />
             </Group>
             {(stationName || programName) && (
-              <div className="video-controls video-program-info" aria-label="Current station and program">
-                {stationName && <Text size="sm" fw={700}>{stationName}</Text>}
+              <div
+                className="video-controls video-program-info"
+                aria-label="Current station and program"
+              >
+                {stationName && (
+                  <Text size="sm" fw={700}>
+                    {stationName}
+                  </Text>
+                )}
                 {programName && <Text size="sm">{programName}</Text>}
               </div>
             )}

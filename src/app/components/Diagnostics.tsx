@@ -1,93 +1,59 @@
 import { memo, useEffect, useRef } from 'react';
 import { Box, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
-import { timelineEvents, type EpgMap } from '../../epg';
 import type { ProgramEvent } from '../../transport/program-info';
 import type { PlayerSnapshot } from '../hooks/usePlayback';
 import type { StreamStats } from '../hooks/useReceiverSession';
 import { format, schedule } from '../format';
-import { TIMELINE_WIDTH, TimelineHours, TimelineTrack, timelineStart } from './ProgramTimeline';
 
 interface ProgramInfoProps {
   service: string | null;
   programs: TransportSnapshot['programs'] | undefined;
-  epg: EpgMap | undefined;
   current: ProgramEvent | null | undefined;
-  now: number;
   logo?: string;
 }
 
 export const ProgramInfo = memo(function ProgramInfo({
   service,
   programs,
-  epg,
   current,
-  now,
   logo,
 }: ProgramInfoProps) {
   const program = service ? programs?.[Number(service)] : undefined;
-  const firstHour = timelineStart(now);
-  const events = timelineEvents(
-    [
-      ...(service ? (epg?.[Number(service)] ?? []) : []),
-      ...(program?.future ?? []),
-      program?.current ?? null,
-      program?.next ?? null,
-    ],
-    now,
-    firstHour,
-  );
   return (
-    <Stack gap="xs">
-      <Paper bg="dark.9" p="md" aria-label="Station and program information">
-        <Stack gap="xs">
-          <Group gap="xs" wrap="nowrap">
-            {logo && <img className="station-logo" src={logo} alt="" />}
-            <Text fw={700} style={{ overflowWrap: 'anywhere' }}>
-              {program?.stationName || (service ? service : '-')}
-            </Text>
-          </Group>
-          <Text style={{ overflowWrap: 'anywhere' }}>
-            {current ? (
-              <>
-                <Text component="span" fw={700}>
-                  {current.title || '—'}
-                </Text>{' '}
-                · {schedule(current)}
-              </>
-            ) : (
-              '—'
-            )}
+    <Paper bg="dark.9" p="md" aria-label="Station and program information">
+      <Stack gap="xs">
+        <Group gap="xs" wrap="nowrap">
+          {logo && <img className="station-logo" src={logo} alt="" />}
+          <Text fw={700} style={{ overflowWrap: 'anywhere' }}>
+            {program?.stationName || (service ? service : '-')}
           </Text>
-          {current?.description && (
-            <Text
-              size="sm"
-              style={{
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-              }}
-            >
-              {current.description}
-            </Text>
+        </Group>
+        <Text style={{ overflowWrap: 'anywhere' }}>
+          {current ? (
+            <>
+              <Text component="span" fw={700}>
+                {current.title || '—'}
+              </Text>{' '}
+              · {schedule(current)}
+            </>
+          ) : (
+            '—'
           )}
-        </Stack>
-      </Paper>
-      {events.length > 0 && (
-        <Paper bg="dark.9" p="md" aria-label="Program schedule">
-          <Box
-            className="program-schedule"
-            style={{ overflowX: 'auto', maxWidth: '100%' }}
-            tabIndex={0}
-            aria-label="Program schedule (next 24 hours)"
+        </Text>
+        {current?.description && (
+          <Text
+            size="sm"
+            style={{
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+            }}
           >
-            <Box w={TIMELINE_WIDTH}>
-              <TimelineHours firstHour={firstHour} />
-              <TimelineTrack events={events} firstHour={firstHour} now={now} height={100} />
-            </Box>
-          </Box>
-        </Paper>
-      )}
-    </Stack>
+            {current.description}
+          </Text>
+        )}
+      </Stack>
+    </Paper>
   );
 });
 
@@ -159,6 +125,9 @@ export function MetricsGrid({
   );
 }
 
+/** Log strip height; controls placed beside the log match it. */
+export const LOG_HEIGHT = 37;
+
 export function LogPanel({ logs }: { logs: string[] }) {
   const logRef = useRef<HTMLPreElement>(null);
   const followLogs = useRef(true);
@@ -181,7 +150,7 @@ export function LogPanel({ logs }: { logs: string[] }) {
           followLogs.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 1;
         }}
         m={0}
-        h={37}
+        h={LOG_HEIGHT}
         py="4"
         px="8"
         c="gray.4"

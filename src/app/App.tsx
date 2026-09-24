@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Alert, Anchor, Container, Grid, Group, Stack, Text } from '@mantine/core';
+import { Alert, Anchor, Box, Button, Container, Grid, Group, Stack, Text } from '@mantine/core';
 import { ReceiverSession } from '../usb/receiver-session';
 import { usePlayback } from './hooks/usePlayback';
 import { useReceiverSession } from './hooks/useReceiverSession';
-import { TunerBar } from './components/TunerBar';
 import { ScanModal } from './components/ScanModal';
 import { VideoStage } from './components/VideoStage';
 import { PipControls } from './components/PipControls';
-import { LogPanel, MetricsGrid, ProgramInfo } from './components/Diagnostics';
+import { ChannelGuide } from './components/ChannelGuide';
+import { LOG_HEIGHT, LogPanel, MetricsGrid, ProgramInfo } from './components/Diagnostics';
 import { currentServiceProgram } from '../epg';
 
 export default function App() {
@@ -58,27 +58,6 @@ export default function App() {
         {!supported && (
           <Alert title="WebUSB unavailable">Use Chrome over HTTPS or localhost.</Alert>
         )}
-        <TunerBar
-          band={session.band}
-          channel={session.channel}
-          channelOptions={session.channelOptions}
-          selected={session.selectedValue}
-          selectedLabel={
-            session.selectedName &&
-            [selectedProgram?.stationName || session.selectedName, currentProgram?.title]
-              .filter(Boolean)
-              .join(' · ')
-          }
-          service={session.service}
-          now={session.epgNow}
-          busy={busy}
-          connected={session.connected}
-          scanning={session.scanning}
-          supported={supported}
-          onSelect={(channel, serviceId) => void session.selectStation(channel, serviceId)}
-          onConnect={() => void session.connect()}
-          onScan={(band) => void session.runScan(band)}
-        />
         <ScanModal
           scanning={session.scanning}
           cancelling={session.scanCancelling}
@@ -89,7 +68,23 @@ export default function App() {
         <Grid gutter="xs">
           <Grid.Col span={12}>
             <Stack gap="xs">
-              <LogPanel logs={logs} />
+              <Group gap="md" wrap="nowrap">
+                <Box flex={1} miw={0}>
+                  <LogPanel logs={logs} />
+                </Box>
+                {!session.connected && !session.scanning && (
+                  <Button
+                    h={LOG_HEIGHT}
+                    color="dark"
+                    variant="white"
+                    disabled={!supported || busy}
+                    loading={busy}
+                    onClick={() => void session.connect()}
+                  >
+                    Connect
+                  </Button>
+                )}
+              </Group>
               <VideoStage
                 canvasRef={playback.canvasRef}
                 ambientCanvasRef={playback.ambientCanvasRef}
@@ -128,10 +123,19 @@ export default function App() {
               <ProgramInfo
                 service={session.service}
                 programs={session.programs}
-                epg={session.epg}
                 current={currentProgram}
-                now={session.epgNow}
                 logo={session.logoFor(session.channel, session.service)}
+              />
+              <ChannelGuide
+                band={session.band}
+                selected={session.selectedValue}
+                service={session.service}
+                channelOptions={session.channelOptions}
+                now={session.epgNow}
+                busy={busy}
+                scanning={session.scanning}
+                onSelect={(channel, serviceId) => void session.selectStation(channel, serviceId)}
+                onScan={(band) => void session.runScan(band)}
               />
               <MetricsGrid
                 stream={session.stream}
