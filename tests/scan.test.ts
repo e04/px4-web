@@ -17,11 +17,15 @@ import type { Channel } from '../src/channels';
 import {
   DEFAULT_SCAN,
   SCAN_STORAGE_KEY,
-  channelLabel,
   isChannelHidden,
+  isTvService,
+  listedStations,
   loadScan,
+  mainService,
+  representativeName,
   saveScan,
   scanChannels,
+  serviceNumber,
   visibleChannels,
   type ScanEntry,
   type ScanSession,
@@ -77,14 +81,14 @@ function fakeSession(script: Record<string, ScriptedChannel>): ScanSession & {
 
 describe('scan persistence and labels', () => {
   it('shows only the channel number when unscanned and the station name when scanned', () => {
-    expect(channelLabel(13, undefined)).toBe('CH 13');
-    expect(channelLabel(13, { locked: false, services: [], scannedAt: 1 })).toBe('CH 13');
+    expect(representativeName(undefined)).toBe('');
+    expect(representativeName({ locked: false, services: [], scannedAt: 1 })).toBe('');
     const entry: ScanEntry = {
       locked: true,
       services: [{ serviceId: 1024, stationName: 'NHK総合1' }],
       scannedAt: 1,
     };
-    expect(channelLabel(27, entry)).toBe('CH 27 · NHK総合1');
+    expect(representativeName(entry)).toBe('NHK総合1');
   });
 
   it('hides only known-unreceivable channels, keeping unscanned visible', () => {
@@ -117,7 +121,7 @@ describe('scan persistence and labels', () => {
   it('provides the nationwide BS/CS lineup until the user scans, without persisting it', async () => {
     await saveValue(SCAN_STORAGE_KEY, undefined, scanStore);
     const defaults = await loadScan();
-    expect(channelLabel('BS1_0', defaults.BS1_0)).toBe('CH BS1_0 · BS朝日');
+    expect(representativeName(defaults.BS1_0)).toBe('BS朝日');
     expect(visibleChannels(defaults, 'BS')).toContain('BS15_2');
     expect(visibleChannels(defaults, 'BS')).not.toContain('BS9_1');
     expect(visibleChannels(defaults, 'CS')).toHaveLength(12);
@@ -134,7 +138,7 @@ describe('scan persistence and labels', () => {
     ]);
     const scanned = await loadScan();
     expect(visibleChannels(scanned, 'BS')).not.toContain('BS1_0');
-    expect(channelLabel('BS9_1', scanned.BS9_1)).toBe('CH BS9_1 · New');
+    expect(representativeName(scanned.BS9_1)).toBe('New');
     expect(scanned.BS1_1).toEqual(DEFAULT_SCAN.BS1_1);
   });
 });
@@ -318,5 +322,98 @@ describe('scanChannels', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('TV service listing', () => {
+  const event = (id: number, start: number, end: number) => ({
+    id,
+    title: 'x',
+    description: '',
+    start,
+    end,
+  });
+  const entry = (...services: [number, number?][]): ScanEntry => ({
+    locked: true,
+    services: services.map(([serviceId, serviceType]) => ({
+      serviceId,
+      stationName: `S${serviceId}`,
+      ...(serviceType != null ? { serviceType } : {}),
+    })),
+    scannedAt: 1,
+  });
+
+  it('skips terrestrial one-seg and data services by service_id', () => {
+    expect(isTvService('T', 1032)).toBe(true);
+    expect(isTvService('T', 1033)).toBe(true);
+    expect(isTvService('T', 1032 | 0x180)).toBe(false);
+    expect(isTvService('T', 1032 | 0x80)).toBe(false);
+    expect(isTvService('T', 1032 | 0x180, 0x01)).toBe(false);
+  });
+
+  it('uses service_type when known, else satellite numbering', () => {
+    expect(isTvService('BS', 151, 0x01)).toBe(true);
+    expect(isTvService('BS', 151, 0xc0)).toBe(false);
+    expect(isTvService('BS', 151)).toBe(true);
+    expect(isTvService('BS', 700)).toBe(false);
+  });
+
+  it('opens the lowest TV service of a TS', () => {
+    expect(mainService('T', [1033, 1032 | 0x180, 1032], undefined)).toBe(1032);
+    expect(mainService('BS', [700, 153, 151], entry([151, 1], [153, 1], [700, 0xc0]))).toBe(151);
+    expect(mainService('BS', [700], undefined)).toBe(700);
+  });
+
+  it('groups terrestrial multi-channel slots and drops one-seg', () => {
+    const scanned = entry([1032], [1033], [1032 | 0x180]);
+    expect(
+      listedStations('T', scanned, undefined).map((station) => station.map((s) => s.serviceId)),
+    ).toEqual([[1032, 1033]]);
+  });
+
+  it('keeps each 110°CS channel of a TS as its own station', () => {
+    const now = 1_000_000;
+    const scanned = entry([296, 1], [297, 1], [300, 1], [55, 1]);
+    const epg = { 296: [event(1, now, now + 10)] };
+    expect(
+      listedStations('CS', scanned, epg).map((station) => station.map((s) => s.serviceId)),
+    ).toEqual([[55], [296], [297], [300]]);
+  });
+
+  it('groups BS services by broadcaster within a TS', () => {
+    const scanned = entry([151, 1], [152, 1], [161, 1]);
+    expect(
+      listedStations('BS', scanned, undefined).map((station) => station.map((s) => s.serviceId)),
+    ).toEqual([[151, 152], [161]]);
+  });
+
+  it('numbers services as a TV does', () => {
+    expect(serviceNumber('T', { serviceId: 1033, stationName: '', remoteKey: 2 })).toBe('022');
+    expect(serviceNumber('T', { serviceId: 1033, stationName: '' })).toBeUndefined();
+    expect(serviceNumber('BS', { serviceId: 151, stationName: '' })).toBe('BS 151');
+    expect(serviceNumber('CS', { serviceId: 55, stationName: '' })).toBe('CS 055');
+  });
+
+  it('ignores EPG services of other stations on a scanned TS', () => {
+    const now = 1_000_000;
+    const epg = { 1056: [event(1, now, now + 10)], 1032: [event(2, now, now + 10)] };
+    expect(
+      listedStations('T', entry([1056, 1]), epg).map((station) => station.map((s) => s.serviceId)),
+    ).toEqual([[1056]]);
+  });
+
+  it('adds EPG-only services missing from the built-in lineup', () => {
+    const now = 1_000_000;
+    const epg = { 151: [event(1, now, now + 10)], 152: [event(2, now, now + 10)] };
+    expect(
+      listedStations('BS', DEFAULT_SCAN.BS1_0, epg).map((g) =>
+        g.map((s) => [s.serviceId, s.stationName]),
+      ),
+    ).toEqual([
+      [
+        [151, 'BS朝日'],
+        [152, ''],
+      ],
+    ]);
   });
 });

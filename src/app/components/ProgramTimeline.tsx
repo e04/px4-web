@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import type { ProgramEvent } from '../../transport/program-info';
 import { Box, Stack, Text, Tooltip } from '@mantine/core';
-import type { timelineEvents } from '../../epg';
+import type { TimelineItem } from '../../epg';
 import { schedule } from '../format';
 
 /** Default timeline scale: 100 px per hour over 24 hours. */
@@ -43,7 +43,7 @@ export function TimelineHours({
 }
 
 interface TimelineTrackProps {
-  events: ReturnType<typeof timelineEvents>;
+  events: TimelineItem[];
   firstHour: number;
   now: number;
   height: number;
@@ -105,11 +105,12 @@ export const TimelineTrack = memo(function TimelineTrack({
         />
       )}
       {/* Plain elements: a guide renders hundreds of these at once. */}
-      {events.map(({ event, left, width }, index) =>
+      {events.map(({ event, left, width, serviceId, lane = 0, lanes = 1 }, index) =>
         range && (left + width < range[0] || left > range[1]) ? null : (
           <div
             key={`${event.id}:${event.start}`}
             className="timeline-event"
+            data-service={serviceId}
             tabIndex={0}
             onMouseEnter={(e) => setActive({ target: e.currentTarget, event })}
             onFocus={(e) => setActive({ target: e.currentTarget, event })}
@@ -118,9 +119,18 @@ export const TimelineTrack = memo(function TimelineTrack({
             style={{
               left,
               width,
+              ...(lanes > 1
+                ? {
+                    top: `${(lane / lanes) * 100}%`,
+                    height: `${100 / lanes}%`,
+                    // The lane above already draws the shared edge.
+                    borderTop: lane > 0 ? 'none' : undefined,
+                  }
+                : {}),
               borderLeft:
                 (index === 0 && left > 0.5) ||
                 (index > 0 &&
+                  (events[index - 1]!.lane ?? 0) === lane &&
                   Math.abs(left - (events[index - 1]!.left + events[index - 1]!.width)) < 0.5)
                   ? 'none'
                   : undefined,

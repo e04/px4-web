@@ -5,19 +5,21 @@ import type { TransportSnapshot } from '../../transport/pipeline';
 import { ReceiverSession } from '../../usb/receiver-session';
 import {
   DEFAULT_SCAN,
-  channelLabel,
   isChannelHidden,
+  listedStations,
   loadScan,
+  mainService,
   representativeName,
+  serviceNumber,
   saveScan,
   scanChannels,
   visibleChannels,
   type ScanEntry,
   type ScanMap,
 } from '../../scan';
-import { CHANNEL_KEY, saveValue, settingsStore } from '../../storage';
+import { CHANNEL_KEY, SERVICE_KEY, loadValue, saveValue, settingsStore } from '../../storage';
 import { DEFAULT_CHANNEL, loadChannel, stateLabels } from '../format';
-import { currentChannelProgram, loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
+import { loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
 import { crawlEpg } from '../../epg-crawl';
 import type { ProgramInfo } from '../../transport/program-info';
 import { logoDataUrl, logoKey, type LogoData } from '../../logo';
@@ -65,7 +67,6 @@ export function useReceiverSession({
   const band = parseChannel(channel).band;
   const hydratedRef = useRef(false);
   const [service, setService] = useState<string | null>(null);
-  const [services, setServices] = useState<number[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanCancelling, setScanCancelling] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
@@ -88,40 +89,60 @@ export function useReceiverSession({
       serviceId == null ? undefined : logoLibrary.channels[channelValue]?.[Number(serviceId)];
     return ref ? logoUrls[logoKey(ref)] : undefined;
   };
+  // One row per station, fronted by its main service; its other services
+  // (e.g. an on-air sub-channel) share the row's timeline where their programs
+  // differ. A TS may carry several stations (110°CS), each getting its own row.
   const channelOptions = useMemo(
     () =>
       (['T', 'BS', 'CS'] as const).flatMap((optionBand) =>
-        visibleChannels(scan, optionBand).map((item) => {
+        visibleChannels(scan, optionBand).flatMap((item) => {
           const entry = scan[String(item)];
           const epg = channelEpg[String(item)];
-          const serviceIds = entry?.services.map((service) => service.serviceId) ?? [];
-          const event = currentChannelProgram(epg, serviceIds, epgNow);
-          const station = channelLabel(item, entry);
           const logoRefs = logoLibrary.channels[String(item)];
-          const logoService = serviceIds.find(
-            (id) => logoRefs?.[id] && logoUrls[logoKey(logoRefs[id])],
-          );
-          return {
-            value: String(item),
-            label: `${station}${event ? ` · ${event.title}` : ''}`,
-            station,
-            name: representativeName(entry),
-            program: event?.title ?? '',
-            // The guide row follows the first service that has any EPG.
-            schedule: epg?.[serviceIds.find((id) => epg[id]?.length) ?? -1] ?? [],
-            band: optionBand,
-            logo: logoService != null ? logoUrls[logoKey(logoRefs![logoService]!)] : undefined,
-          };
+          const stations = listedStations(optionBand, entry, epg);
+          // Unscanned channels have no known service; tuning then opens the main one.
+          return (stations.length ? stations : [[]]).map((services, index) => {
+            const main = services[0];
+            const logoRef = main ? logoRefs?.[main.serviceId] : undefined;
+            return {
+              value: `${item}/${main?.serviceId ?? ''}`,
+              channel: String(item),
+              serviceId: main?.serviceId ?? null,
+              services,
+              name: main?.stationName || (index === 0 ? representativeName(entry) : ''),
+              number: (main && serviceNumber(optionBand, main)) ?? `CH ${item}`,
+              schedules: services.map((service) => ({
+                serviceId: service.serviceId,
+                events: epg?.[service.serviceId] ?? [],
+              })),
+              band: optionBand,
+              logo: logoRef ? logoUrls[logoKey(logoRef)] : undefined,
+            };
+          });
         }),
       ),
-    [scan, channelEpg, epgNow, logoLibrary.channels, logoUrls],
+    [scan, channelEpg, logoLibrary.channels, logoUrls],
   );
+  const tunedOptions = channelOptions.filter((option) => option.channel === channel);
+  const selectedOption =
+    tunedOptions.find((option) =>
+      option.services.some((item) => String(item.serviceId) === service),
+    ) ?? tunedOptions[0];
   const [transport, setTransport] = useState<TransportSnapshot>();
   const [programs, setPrograms] = useState<TransportSnapshot['programs']>();
+  // Scan-known name of the tuned service; live SDT names take precedence in the UI.
+  const selectedName =
+    selectedOption &&
+    (selectedOption.services.find((item) => String(item.serviceId) === service)?.stationName ||
+      selectedOption.name ||
+      selectedOption.number);
   const programKeyRef = useRef<string | undefined>(undefined);
   const epgRef = useRef<EpgMap>({});
   const channelRef = useRef(channel);
   channelRef.current = channel;
+  // The channel the main tuner's stream carries; unset while a tune is in flight
+  // so SI polled from the previous multiplex is never filed under the new one.
+  const streamChannelRef = useRef<string | undefined>(undefined);
   const lastEpgSave = useRef(0);
   const epgDirty = useRef(false);
   const scanActiveRef = useRef(false);
@@ -176,9 +197,9 @@ export function useReceiverSession({
     stopPlayer();
     const session = sessionRef.current;
     sessionRef.current = undefined;
+    streamChannelRef.current = undefined;
     setConnected(false);
     if (session) await session.close();
-    setServices([]);
     setService(null);
     setTransport(undefined);
     setPrograms(undefined);
@@ -221,11 +242,17 @@ export function useReceiverSession({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [savedScan, savedChannel] = await Promise.all([loadScan(), loadChannel()]);
+      const [savedScan, savedChannel, savedService] = await Promise.all([
+        loadScan(),
+        loadChannel(),
+        loadValue<unknown>(SERVICE_KEY, settingsStore),
+      ]);
       if (cancelled) return;
       setScan(savedScan);
-      if (!isChannelHidden(savedScan, savedChannel)) setChannel(savedChannel);
-      else {
+      if (!isChannelHidden(savedScan, savedChannel)) {
+        setChannel(savedChannel);
+        if (typeof savedService === 'string') setService(savedService);
+      } else {
         const first = visibleChannels(savedScan, parseChannel(savedChannel).band)[0];
         setChannel(first != null ? String(first) : savedChannel);
       }
@@ -240,6 +267,11 @@ export function useReceiverSession({
     if (!hydratedRef.current) return;
     void saveValue(CHANNEL_KEY, channel, settingsStore);
   }, [channel]);
+
+  useEffect(() => {
+    if (!hydratedRef.current || service == null) return;
+    void saveValue(SERVICE_KEY, service, settingsStore);
+  }, [service]);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,6 +302,7 @@ export function useReceiverSession({
     const timer = window.setInterval(() => {
       const current = sessionRef.current;
       if (current && !scanActiveRef.current) {
+        const streamChannel = streamChannelRef.current;
         void current
           .refreshTransport()
           .then(() => {
@@ -277,6 +310,8 @@ export function useReceiverSession({
             setTransport(current.transport ? { ...current.transport } : undefined);
             if (
               current.transport?.programs &&
+              streamChannel === channelRef.current &&
+              streamChannel === streamChannelRef.current &&
               (programKeyRef.current === undefined || performance.now() - lastProgramPoll >= 2000)
             ) {
               lastProgramPoll = performance.now();
@@ -304,16 +339,14 @@ export function useReceiverSession({
             }
             setStream(current.streamStats ? { ...current.streamStats } : undefined);
             const nextServices = current.transport?.services.map((item) => item.serviceId) ?? [];
-            setServices((previous) =>
-              previous.length === nextServices.length &&
-              previous.every((id, i) => id === nextServices[i])
-                ? previous
-                : nextServices,
-            );
             setService((selected) =>
               selected && nextServices.includes(Number(selected))
                 ? selected
-                : (nextServices[0]?.toString() ?? null),
+                : (mainService(
+                    parseChannel(channelRef.current).band,
+                    nextServices,
+                    scanRef.current[channelRef.current],
+                  )?.toString() ?? null),
             );
             const snapshot = current.b25?.snapshot;
             setB25(
@@ -419,6 +452,12 @@ export function useReceiverSession({
     throw new Error('No services were found. Check the antenna and channel.');
   };
 
+  // The requested service when the TS carries it, otherwise the TS's main service.
+  const pickService = (value: string, found: number[], preferred: string | null) =>
+    preferred && found.includes(Number(preferred))
+      ? preferred
+      : String(mainService(parseChannel(value).band, found, scanRef.current[value]));
+
   const connect = async () => {
     if (busy) return;
     setBusy(true);
@@ -443,10 +482,11 @@ export function useReceiverSession({
       const result = await session.receiver.tune(channel);
       if (!result.demodLocked) throw new Error('The channel could not be locked.');
       await session.startCapture();
+      streamChannelRef.current = channel;
       setStatus('Discovering services');
       const found = await waitForServices(session);
-      setServices(found);
-      setService(String(found[0]));
+      const next = pickService(channel, found, service);
+      setService(next);
       addLog(`${found.length} service${found.length === 1 ? '' : 's'} found`);
       if (!session.deviceInfo.hasCardReader) {
         addLog('Use the device side with a card reader (Q: primary; MLT8: 5 tuners)', true);
@@ -454,7 +494,7 @@ export function useReceiverSession({
         return;
       }
       try {
-        await openPlayback(String(found[0]));
+        await openPlayback(next);
       } catch (error) {
         addLog(error instanceof Error ? error.message : String(error), true);
         stopPlayer();
@@ -482,9 +522,11 @@ export function useReceiverSession({
     setStatus(`${message || fallback} Select another channel.`);
   };
 
-  const changeChannel = async (value: string | null) => {
+  const changeChannel = async (value: string | null, preferred: string | null = null) => {
     if (!value || busy) return;
+    streamChannelRef.current = undefined;
     setChannel(value);
+    setService(preferred);
     setPrograms(undefined);
     programKeyRef.current = undefined;
     const session = sessionRef.current;
@@ -495,10 +537,10 @@ export function useReceiverSession({
       setStatus(`Switching to CH ${value}`);
       addLog(`Switching to CH ${value}`);
       await session.retune(value);
+      streamChannelRef.current = value;
       setStatus('Discovering services');
       const found = await waitForServices(session);
-      setServices(found);
-      const next = service && found.includes(Number(service)) ? service : String(found[0]);
+      const next = pickService(value, found, preferred);
       setService(next);
       try {
         await openPlayback(next);
@@ -540,6 +582,14 @@ export function useReceiverSession({
     } finally {
       setBusy(false);
     }
+  };
+
+  // A guide row names both the TS and the service; only a TS change retunes.
+  const selectStation = async (value: string, serviceId: number | null) => {
+    if (busy) return;
+    if (value !== channel) await changeChannel(value, serviceId != null ? String(serviceId) : null);
+    else if (serviceId != null && String(serviceId) !== service)
+      await changeService(String(serviceId));
   };
 
   const cancelScan = () => {
@@ -590,20 +640,21 @@ export function useReceiverSession({
             ? String(fallback)
             : undefined;
       if (target == null) {
-        setServices([]);
         setService(null);
         setStatus(owned ? 'No receivable channels found' : 'Ready');
         return;
       }
+      streamChannelRef.current = undefined;
       setChannel(target);
       try {
         await session.retune(target);
+        streamChannelRef.current = target;
         setStatus('Discovering services');
         const found = await waitForServices(session);
-        setServices(found);
-        setService(String(found[0]));
+        const next = pickService(target, found, target === priorChannel ? service : null);
+        setService(next);
         addLog(`${found.length} service${found.length === 1 ? '' : 's'} found on CH ${target}`);
-        await openPlayback(String(found[0]));
+        await openPlayback(next);
       } catch (error) {
         if (sessionRef.current !== session) return;
         if (isFatalSession(session)) {
@@ -631,6 +682,7 @@ export function useReceiverSession({
         await fresh.receiver.initialize(firmware);
       }
       if (controller.signal.aborted) throw new Error('Scan cancelled');
+      streamChannelRef.current = undefined;
       setStatus(`Scanning channels (0/${scanChannelsForBand.length})`);
       await scanChannels(session, {
         channels: scanChannelsForBand,
@@ -700,8 +752,9 @@ export function useReceiverSession({
     channel,
     band,
     service,
-    services,
     channelOptions,
+    selectedValue: selectedOption?.value,
+    selectedName,
     epgNow,
     epg: channelEpg[channel],
     logoFor,
@@ -718,8 +771,7 @@ export function useReceiverSession({
     b25,
     epgCrawl,
     connect,
-    changeChannel,
-    changeService,
+    selectStation,
     cancelScan,
     runScan,
   };

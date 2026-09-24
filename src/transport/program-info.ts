@@ -19,6 +19,10 @@ export interface ProgramInfo {
   current: ProgramEvent | null;
   next: ProgramEvent | null;
   future: ProgramEvent[];
+  /** SDT service_descriptor service_type (0x01 = digital TV). */
+  serviceType?: number;
+  /** NIT ts_information_descriptor remote_control_key_id (terrestrial). */
+  remoteKey?: number;
   /** SDT logo_transmission_descriptor; the image itself arrives in CDT. */
   logo?: LogoRef;
 }
@@ -27,6 +31,8 @@ interface ServiceState {
   serviceId: number;
   stationName: string;
   tsName?: string;
+  serviceType?: number;
+  remoteKey?: number;
   logo?: LogoRef;
   current: ProgramEvent | null;
   next: ProgramEvent | null;
@@ -112,8 +118,10 @@ export class ProgramInformation {
       if (pid === 0x11 && section.tableId === 'SDT[actual]') {
         for (const service of section.services) {
           const descriptor = service.descriptors.find((d) => d.tag === 'service');
-          if (descriptor?.tag === 'service')
+          if (descriptor?.tag === 'service') {
             this.service(service.serviceId).stationName = text(descriptor.serviceName);
+            this.service(service.serviceId).serviceType = descriptor.serviceType;
+          }
           const logo = service.descriptors.find((d) => d.tag === 'logoTransmission');
           // Type 3 (simple logo) is a character string, not a CDT image.
           if (logo?.tag === 'logoTransmission' && logo.logoTransmissionType !== 3)
@@ -143,8 +151,10 @@ export class ProgramInformation {
           const info = stream.transportDescriptors.find((d) => d.tag === 'tsInformation');
           if (info?.tag !== 'tsInformation') continue;
           for (const transmission of info.transmissionTypes)
-            for (const id of transmission.serviceIdList)
+            for (const id of transmission.serviceIdList) {
               this.service(id).tsName = text(info.tsName);
+              this.service(id).remoteKey = info.remoteControlKeyId;
+            }
         }
       } else if (
         (pid === 0x12 || pid === 0x26 || pid === 0x27) &&
@@ -245,6 +255,8 @@ export class ProgramInformation {
         current: service.current,
         next: service.next,
         future: [...service.future.values()].sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
+        ...(service.serviceType != null ? { serviceType: service.serviceType } : {}),
+        ...(service.remoteKey != null ? { remoteKey: service.remoteKey } : {}),
         ...(service.logo ? { logo: service.logo } : {}),
       };
     }

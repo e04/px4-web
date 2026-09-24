@@ -10,11 +10,11 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import type { Broadcast } from '../../channels';
-import { timelineEvents } from '../../epg';
+import { stationTimeline, type TimelineItem } from '../../epg';
 import type { ChannelOption } from '../hooks/useReceiverSession';
 import { TimelineHours, TimelineTrack, timelineStart } from './ProgramTimeline';
 
-const STATION_WIDTH = 180;
+const STATION_WIDTH = 300;
 const ROW_HEIGHT = 84;
 const ROW_GAP = 4;
 // Rows touch and overlap by the 1px program border so it is not drawn twice.
@@ -25,7 +25,7 @@ const HOUR_WIDTH = 200;
 // so scrolling re-renders rarely.
 const CULL_STEP = 512;
 
-const NO_EVENTS: ReturnType<typeof timelineEvents> = [];
+const NO_EVENTS: TimelineItem[] = [];
 
 const BANDS: { value: Broadcast; label: string }[] = [
   { value: 'T', label: '地デジ' },
@@ -37,12 +37,13 @@ interface ChannelGuideProps {
   opened: boolean;
   onClose: () => void;
   band: Broadcast;
-  channel: string;
+  selected: string | undefined;
+  service: string | null;
   channelOptions: ChannelOption[];
   now: number;
   busy: boolean;
   scanning: boolean;
-  onChannel: (value: string) => void;
+  onSelect: (channel: string, serviceId: number | null) => void;
   onScan: (band: Broadcast) => void;
 }
 
@@ -50,12 +51,13 @@ export function ChannelGuide({
   opened,
   onClose,
   band,
-  channel,
+  selected: selectedValue,
+  service,
   channelOptions,
   now,
   busy,
   scanning,
-  onChannel,
+  onSelect,
   onScan,
 }: ChannelGuideProps) {
   // Browsing another band only changes the list; tuning waits for a station click.
@@ -70,7 +72,7 @@ export function ChannelGuide({
         .filter((option) => option.band === viewBand)
         .map((option) => ({
           option,
-          events: timelineEvents(option.schedule, now, firstHour, HOUR_WIDTH),
+          events: stationTimeline(option.schedules, now, firstHour, HOUR_WIDTH),
         })),
     [channelOptions, viewBand, now, firstHour],
   );
@@ -85,9 +87,10 @@ export function ChannelGuide({
       requestAnimationFrame(() => selectedRef.current?.scrollIntoView({ block: 'center' }));
   }, [opened]);
 
-  const select = (value: string) => {
+  const select = (option: ChannelOption, serviceId = option.serviceId) => {
     onClose();
-    if (value !== channel) onChannel(value);
+    if (option.value !== selectedValue || String(serviceId) !== service)
+      onSelect(option.channel, serviceId);
   };
 
   return (
@@ -140,7 +143,7 @@ export function ChannelGuide({
             <Box style={{ display: 'flex' }}>
               <Stack gap={0} w={STATION_WIDTH} pt={HOURS_HEIGHT + ROW_GAP} style={{ flex: 'none' }}>
                 {rows.map(({ option }, index) => {
-                  const selected = option.value === channel;
+                  const selected = option.value === selectedValue;
                   return (
                     <UnstyledButton
                       key={option.value}
@@ -152,7 +155,7 @@ export function ChannelGuide({
                       px="sm"
                       disabled={busy}
                       aria-current={selected || undefined}
-                      onClick={() => select(option.value)}
+                      onClick={() => select(option)}
                     >
                       <Group gap="xs" wrap="nowrap">
                         {/* Placeholder keeps names aligned with rows that have a logo. */}
@@ -166,11 +169,11 @@ export function ChannelGuide({
                         )}
                         <Box miw={0}>
                           <Text size="sm" fw={700} truncate>
-                            {option.name || `CH ${option.value}`}
+                            {option.name || option.number}
                           </Text>
                           {option.name && (
                             <Text size="xs" c="dimmed" truncate>
-                              CH {option.value}
+                              {option.number}
                             </Text>
                           )}
                         </Box>
@@ -200,7 +203,14 @@ export function ChannelGuide({
                         mt={index ? ROW_OVERLAP : 0}
                         pos="relative"
                         style={{ cursor: busy ? undefined : 'pointer' }}
-                        onClick={() => !busy && select(option.value)}
+                        // A program in a sub-service lane tunes that service.
+                        onClick={(event) => {
+                          if (busy) return;
+                          const lane = (event.target as HTMLElement).closest<HTMLElement>(
+                            '[data-service]',
+                          );
+                          select(option, lane ? Number(lane.dataset.service) : option.serviceId);
+                        }}
                       >
                         <TimelineTrack
                           events={shown ? events : NO_EVENTS}

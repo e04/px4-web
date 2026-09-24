@@ -39,6 +39,66 @@ export function timelineEvents(events: (ProgramEvent | null)[], now: number, sta
       width: (Math.min(event.end!, end) - Math.max(event.start!, start)) / msPerPx,
     }));
 }
+export type TimelineItem = ReturnType<typeof timelineEvents>[number] & {
+  serviceId?: number;
+  /** Vertical slot within the row while services air different programs. */
+  lane?: number;
+  lanes?: number;
+};
+
+const sameProgram = (a: ProgramEvent, b: ProgramEvent) =>
+  a.start === b.start && a.end === b.end && a.title === b.title;
+
+/**
+ * One station's timeline across its services (main first). Sub-service
+ * programs identical to the main one are dropped, so a row normally stays
+ * single; where they differ (multi-channel slots) the overlapping programs
+ * share the row height in lanes, main on top.
+ */
+export function stationTimeline(
+  services: { serviceId: number; events: (ProgramEvent | null)[] }[],
+  now: number,
+  start = now,
+  hourWidth = 100,
+): TimelineItem[] {
+  const [main, ...subs] = services.map((service) => ({
+    serviceId: service.serviceId,
+    items: timelineEvents(service.events, now, start, hourWidth),
+  }));
+  if (!main) return [];
+  const distinct = subs
+    .map((sub) => ({
+      ...sub,
+      // Untitled events are placeholders, not a different program.
+      items: sub.items.filter(
+        (item) =>
+          item.event.title && !main.items.some((other) => sameProgram(other.event, item.event)),
+      ),
+    }))
+    .filter((sub) => sub.items.length);
+  if (!distinct.length) return main.items;
+  const all = [main, ...distinct];
+  return all
+    .flatMap((service) =>
+      service.items.map((item) => {
+        // The main service always airs; others count where they overlap this program.
+        const active = all.filter(
+          (other, index) =>
+            index === 0 ||
+            other === service ||
+            other.items.some((next) => overlaps(next.event, item.event)),
+        );
+        return {
+          ...item,
+          serviceId: service.serviceId,
+          lane: active.indexOf(service),
+          lanes: active.length,
+        };
+      }),
+    )
+    .sort((a, b) => a.lane - b.lane || a.left - b.left);
+}
+
 export function currentChannelProgram(epg: EpgMap | undefined, serviceIds: number[], now: number): ProgramEvent | undefined {
   for (const id of serviceIds) {
     const match = epg?.[id]?.find((event) => event.start != null && event.start <= now && event.end != null && now < event.end && event.title);

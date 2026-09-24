@@ -9,6 +9,7 @@ export const epgStore: UseStore = createStore('px4-epg', 'epg');
 export const logoStore: UseStore = createStore('px4-logo', 'logo');
 
 export const CHANNEL_KEY = 'px4-channel';
+export const SERVICE_KEY = 'px4-service';
 export const CAPTION_KEY = 'px4-caption';
 export const VOLUME_KEY = 'px4-volume';
 

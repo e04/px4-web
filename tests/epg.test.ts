@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentChannelProgram, currentServiceProgram, mergeEpg, timelineEvents } from '../src/epg';
+import { currentChannelProgram, currentServiceProgram, mergeEpg, stationTimeline, timelineEvents } from '../src/epg';
 import type { ProgramEvent, ProgramInfo } from '../src/transport/program-info';
 
 describe('EPG merge', () => {
@@ -68,5 +68,39 @@ describe('rescheduled programs', () => {
   it('shows one block per event on the timeline', () => {
     const events = timelineEvents([ev(1, 'A', 0, 54), ev(1, 'A', 5, 59)], 0);
     expect(events.map((item) => item.event.start)).toEqual([5 * min]);
+  });
+});
+
+describe('station timeline', () => {
+  const event = (id: number, title: string, start: number, end: number): ProgramEvent =>
+    ({ id, title, description: '', start, end });
+  const lanes = (items: ReturnType<typeof stationTimeline>) =>
+    items.map((item) => [item.event.title, item.serviceId ?? null, item.lane ?? 0, item.lanes ?? 1]);
+
+  it('stays a single lane while sub-services simulcast the main one', () => {
+    const main = [event(1, 'News', 0, 3600000), event(2, 'Drama', 3600000, 7200000)];
+    const sub = [event(11, 'News', 0, 3600000), event(12, 'Drama', 3600000, 7200000)];
+    expect(lanes(stationTimeline([{ serviceId: 1024, events: main }, { serviceId: 1025, events: sub }], 0))).toEqual([
+      ['News', null, 0, 1],
+      ['Drama', null, 0, 1],
+    ]);
+  });
+
+  it('splits only the programs overlapping a different sub-service program', () => {
+    const main = [event(1, 'News', 0, 3600000), event(2, 'Baseball', 3600000, 7200000)];
+    const sub = [event(11, 'News', 0, 3600000), event(12, 'Anime', 3600000, 7200000)];
+    expect(lanes(stationTimeline([{ serviceId: 1024, events: main }, { serviceId: 1025, events: sub }], 0))).toEqual([
+      ['News', 1024, 0, 1],
+      ['Baseball', 1024, 0, 2],
+      ['Anime', 1025, 1, 2],
+    ]);
+  });
+
+  it('ignores untitled sub-service placeholders', () => {
+    const main = [event(1, 'News', 0, 3600000)];
+    const sub = [event(11, '', 0, 3600000)];
+    expect(lanes(stationTimeline([{ serviceId: 1024, events: main }, { serviceId: 1025, events: sub }], 0))).toEqual([
+      ['News', null, 0, 1],
+    ]);
   });
 });

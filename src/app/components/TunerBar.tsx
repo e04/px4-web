@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Button, Combobox, Group, Input, Select, Text } from '@mantine/core';
+import { Button, Combobox, Group, Input, Text } from '@mantine/core';
 import type { Broadcast } from '../../channels';
-import type { TransportSnapshot } from '../../transport/pipeline';
 import type { ChannelOption } from '../hooks/useReceiverSession';
 import { ChannelGuide } from './ChannelGuide';
 
@@ -9,16 +8,15 @@ interface TunerBarProps {
   band: Broadcast;
   channel: string;
   channelOptions: ChannelOption[];
-  now: number;
+  selected: string | undefined;
+  selectedLabel: string | undefined;
   service: string | null;
-  services: number[];
-  programs: TransportSnapshot['programs'] | undefined;
+  now: number;
   busy: boolean;
   connected: boolean;
   scanning: boolean;
   supported: boolean;
-  onChannel: (value: string) => void;
-  onService: (value: string | null) => void;
+  onSelect: (channel: string, serviceId: number | null) => void;
   onConnect: () => void;
   onScan: (band: Broadcast) => void;
 }
@@ -27,27 +25,25 @@ export function TunerBar({
   band,
   channel,
   channelOptions,
-  now,
+  selected,
+  selectedLabel,
   service,
-  services,
-  programs,
+  now,
   busy,
   connected,
   scanning,
   supported,
-  onChannel,
-  onService,
+  onSelect,
   onConnect,
   onScan,
 }: TunerBarProps) {
   const [guideOpened, setGuideOpened] = useState(false);
-  const selected = channelOptions.find((item) => item.value === channel);
   return (
     <Group align="end" gap="sm">
       <Input
         component="button"
         type="button"
-        aria-label="Physical channel"
+        aria-label="Channel"
         aria-haspopup="dialog"
         pointer
         rightSection={<Combobox.Chevron />}
@@ -58,32 +54,21 @@ export function TunerBar({
         miw={{ base: '100%', xs: 220 }}
       >
         <Text span size="sm" truncate display="block">
-          {selected?.label ?? `CH ${channel}`}
+          {selectedLabel ?? `CH ${channel}`}
         </Text>
       </Input>
       <ChannelGuide
         opened={guideOpened && !scanning}
         onClose={() => setGuideOpened(false)}
         band={band}
-        channel={channel}
+        selected={selected}
+        service={service}
         channelOptions={channelOptions}
         now={now}
         busy={busy}
         scanning={scanning}
-        onChannel={onChannel}
+        onSelect={onSelect}
         onScan={onScan}
-      />
-      <Select
-        aria-label="Service"
-        data={services.map((id) => ({
-          value: String(id),
-          label: programs?.[id]?.stationName || `Service ${id}`,
-        }))}
-        value={service}
-        onChange={(value) => void onService(value)}
-        disabled={!services.length || busy}
-        allowDeselect={false}
-        w={210}
       />
       {!connected && !scanning && (
         <Button

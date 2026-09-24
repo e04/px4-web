@@ -62,16 +62,20 @@ export default function App() {
           band={session.band}
           channel={session.channel}
           channelOptions={session.channelOptions}
-          now={session.epgNow}
+          selected={session.selectedValue}
+          selectedLabel={
+            session.selectedName &&
+            [selectedProgram?.stationName || session.selectedName, currentProgram?.title]
+              .filter(Boolean)
+              .join(' · ')
+          }
           service={session.service}
-          services={session.services}
-          programs={session.programs}
+          now={session.epgNow}
           busy={busy}
           connected={session.connected}
           scanning={session.scanning}
           supported={supported}
-          onChannel={(value) => void session.changeChannel(value)}
-          onService={(value) => void session.changeService(value)}
+          onSelect={(channel, serviceId) => void session.selectStation(channel, serviceId)}
           onConnect={() => void session.connect()}
           onScan={(band) => void session.runScan(band)}
         />
