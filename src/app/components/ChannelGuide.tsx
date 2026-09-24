@@ -348,7 +348,6 @@ export function ChannelGuide({
                       height={ROW_HEIGHT}
                       hourWidth={HOUR_WIDTH}
                       descriptionLines={4}
-                      portalTarget={portalTarget}
                     />
                     {events.length === 0 && (
                       <Text
