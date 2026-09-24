@@ -28,6 +28,7 @@ const HOUR_WIDTH = 200;
 const CULL_STEP = 512;
 
 const PREVIEW_WIDTH = 384;
+const PREVIEW_OFFSET = 4;
 const PREVIEW_OPEN_DELAY = 400;
 // The tuner outlives the popup this long, so re-entering the row (or crossing
 // the gap between the columns) shows the same preview again without retuning.
@@ -61,11 +62,19 @@ interface ChannelGuideProps {
   portalTarget?: HTMLElement;
 }
 
-function StationPreview({ canvas, state }: { canvas: HTMLCanvasElement; state: PreviewState }) {
+function StationPreview({
+  canvas,
+  state,
+  width,
+}: {
+  canvas: HTMLCanvasElement;
+  state: PreviewState;
+  width: number;
+}) {
   return (
     <Box
       pos="relative"
-      w={PREVIEW_WIDTH}
+      w={width}
       bg="black"
       style={{ aspectRatio: '16 / 9', overflow: 'hidden' }}
       aria-label="Station preview"
@@ -127,6 +136,7 @@ export function ChannelGuide({
   );
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
+  const stationsRef = useRef<HTMLDivElement>(null);
   const [cullX, setCullX] = useState(0);
   const [cullY, setCullY] = useState(0);
   const rangeX = [(cullX - 1) * CULL_STEP, (cullX + 2) * CULL_STEP + window.innerWidth] as const;
@@ -172,6 +182,15 @@ export function ChannelGuide({
     // The target is keyed by row value; the option object is rebuilt on every EPG update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewValue]);
+  // The preview sits left of the station column when it fits; otherwise it goes
+  // above (or below) the row. Placement is decided here rather than by flip,
+  // which measures against the viewport instead of the portal target.
+  const previewOpen = previewValue !== undefined && previewValue === hovered;
+  const previewLeft =
+    previewOpen &&
+    (stationsRef.current?.getBoundingClientRect().left ?? 0) -
+      (portalTarget?.getBoundingClientRect().left ?? 0) >=
+      PREVIEW_WIDTH + PREVIEW_OFFSET;
   const hover = (value: string) => ({
     onMouseEnter: () => setHovered(value),
     onMouseLeave: () => setHovered((current) => (current === value ? null : current)),
@@ -226,7 +245,13 @@ export function ChannelGuide({
         onScroll={(event) => setCullY(Math.floor(event.currentTarget.scrollTop / CULL_STEP))}
       >
         <Box style={{ display: 'flex' }}>
-          <Stack gap={0} w={STATION_WIDTH} pt={HOURS_HEIGHT + ROW_GAP} style={{ flex: 'none' }}>
+          <Stack
+            ref={stationsRef}
+            gap={0}
+            w={STATION_WIDTH}
+            pt={HOURS_HEIGHT + ROW_GAP}
+            style={{ flex: 'none' }}
+          >
             {rows.map(({ option }, index) => {
               const selected = option.value === selectedValue;
               return (
@@ -234,8 +259,9 @@ export function ChannelGuide({
                   key={option.value}
                   // Hidden as soon as the pointer leaves the row.
                   opened={option.value === previewValue && option.value === hovered}
-                  position="top-start"
-                  offset={4}
+                  position={previewLeft ? 'left' : 'top'}
+                  middlewares={{ flip: !previewLeft, shift: true }}
+                  offset={PREVIEW_OFFSET}
                   shadow="md"
                   transitionProps={{ duration: 0 }}
                   portalProps={portalTarget ? { target: portalTarget } : undefined}
@@ -275,7 +301,11 @@ export function ChannelGuide({
                     bd={0}
                     style={{ overflow: 'hidden', pointerEvents: 'none' }}
                   >
-                    <StationPreview canvas={previewCanvas} state={previewState} />
+                    <StationPreview
+                      canvas={previewCanvas}
+                      state={previewState}
+                      width={PREVIEW_WIDTH}
+                    />
                   </Popover.Dropdown>
                 </Popover>
               );
