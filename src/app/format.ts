@@ -2,8 +2,6 @@ import { parseChannel } from '../channels';
 import { CAPTION_KEY, CHANNEL_KEY, VOLUME_KEY, loadValue, settingsStore } from '../storage';
 import type { ProgramEvent } from '../transport/program-info';
 
-export const SCAN_OPTION = '__scan';
-
 export const stateLabels: Record<string, string> = {
   connected: 'Connected',
   initializing: 'Initializing device',

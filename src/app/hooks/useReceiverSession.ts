@@ -8,6 +8,7 @@ import {
   channelLabel,
   isChannelHidden,
   loadScan,
+  representativeName,
   saveScan,
   scanChannels,
   visibleChannels,
@@ -15,13 +16,15 @@ import {
   type ScanMap,
 } from '../../scan';
 import { CHANNEL_KEY, saveValue, settingsStore } from '../../storage';
-import { DEFAULT_CHANNEL, SCAN_OPTION, loadChannel, stateLabels } from '../format';
+import { DEFAULT_CHANNEL, loadChannel, stateLabels } from '../format';
 import { currentChannelProgram, loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
 import { crawlEpg } from '../../epg-crawl';
 import type { ProgramInfo } from '../../transport/program-info';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 
 export type StreamStats = NonNullable<ReceiverSession['streamStats']>;
+
+export type ChannelOption = ReturnType<typeof useReceiverSession>['channelOptions'][number];
 
 export interface ScanProgress {
   done: number;
@@ -70,24 +73,23 @@ export function useReceiverSession({
   const [channelEpg, setChannelEpg] = useState<Record<string, EpgMap>>({});
   const [epgNow, setEpgNow] = useState(Date.now());
   const channelOptions = useMemo(
-    () => [
-      { value: SCAN_OPTION, label: 'Scan channels…', station: 'Scan channels…', program: '' },
-      ...visibleChannels(scan, band).map((item) => {
+    () =>
+      visibleChannels(scan, band).map((item) => {
         const entry = scan[String(item)];
-        const event = currentChannelProgram(
-          channelEpg[String(item)],
-          entry?.services.map((service) => service.serviceId) ?? [],
-          epgNow,
-        );
+        const epg = channelEpg[String(item)];
+        const serviceIds = entry?.services.map((service) => service.serviceId) ?? [];
+        const event = currentChannelProgram(epg, serviceIds, epgNow);
         const station = channelLabel(item, entry);
         return {
           value: String(item),
           label: `${station}${event ? ` · ${event.title}` : ''}`,
           station,
+          name: representativeName(entry),
           program: event?.title ?? '',
+          // The guide row follows the first service that has any EPG.
+          schedule: epg?.[serviceIds.find((id) => epg[id]?.length) ?? -1] ?? [],
         };
       }),
-    ],
     [scan, band, channelEpg, epgNow],
   );
   const [transport, setTransport] = useState<TransportSnapshot>();
@@ -411,10 +413,6 @@ export function useReceiverSession({
 
   const changeChannel = async (value: string | null) => {
     if (!value || busy) return;
-    if (value === SCAN_OPTION) {
-      void runScan();
-      return;
-    }
     setChannel(value);
     setPrograms(undefined);
     programKeyRef.current = undefined;

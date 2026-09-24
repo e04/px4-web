@@ -1,11 +1,21 @@
-import { Box, Button, CheckIcon, Group, Select, Text } from '@mantine/core';
+import { useState } from 'react';
+import { Button, Combobox, Group, Input, Select, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
+import type { ChannelOption } from '../hooks/useReceiverSession';
+import { ChannelGuide } from './ChannelGuide';
+
+const BANDS = [
+  { value: 'T', label: '地デジ' },
+  { value: 'BS', label: 'BS' },
+  { value: 'CS', label: '110°CS' },
+];
 
 interface TunerBarProps {
   band: string;
   onBand: (value: string | null) => void;
   channel: string;
-  channelOptions: { value: string; label: string; station: string; program: string }[];
+  channelOptions: ChannelOption[];
+  now: number;
   service: string | null;
   services: number[];
   programs: TransportSnapshot['programs'] | undefined;
@@ -13,9 +23,10 @@ interface TunerBarProps {
   connected: boolean;
   scanning: boolean;
   supported: boolean;
-  onChannel: (value: string | null) => void;
+  onChannel: (value: string) => void;
   onService: (value: string | null) => void;
   onConnect: () => void;
+  onScan: () => void;
 }
 
 export function TunerBar({
@@ -23,6 +34,7 @@ export function TunerBar({
   onBand,
   channel,
   channelOptions,
+  now,
   service,
   services,
   programs,
@@ -33,56 +45,49 @@ export function TunerBar({
   onChannel,
   onService,
   onConnect,
+  onScan,
 }: TunerBarProps) {
+  const [guideOpened, setGuideOpened] = useState(false);
+  const selected = channelOptions.find((item) => item.value === channel);
   return (
     <Group align="end" gap="sm">
       <Select
         aria-label="Broadcast"
         value={band}
         onChange={onBand}
-        data={[
-          { value: 'T', label: '地デジ' },
-          { value: 'BS', label: 'BS' },
-          { value: 'CS', label: '110°CS' },
-        ]}
+        data={BANDS}
         allowDeselect={false}
         disabled={busy}
         w={110}
       />
-      <Select
+      <Input
+        component="button"
+        type="button"
         aria-label="Physical channel"
-        data={channelOptions}
-        renderOption={({ option, checked }) => {
-          const entry = channelOptions.find((item) => item.value === option.value);
-          return (
-            <Box
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '20px minmax(0, 220px) minmax(0, 1fr)',
-                gap: 12,
-                width: '100%',
-                alignItems: 'center',
-              }}
-            >
-              <Box w={20} h={20}>
-                {checked && <CheckIcon size={16} />}
-              </Box>
-              <Text size="sm" fw={700} truncate>
-                {entry?.station ?? option.label}
-              </Text>
-              <Text size="sm" truncate>
-                {entry?.program ?? ''}
-              </Text>
-            </Box>
-          );
-        }}
-        value={channel}
-        onChange={(value) => void onChannel(value)}
-        searchable
-        allowDeselect={false}
+        aria-haspopup="dialog"
+        pointer
+        rightSection={<Combobox.Chevron />}
+        rightSectionPointerEvents="none"
         disabled={busy}
+        onClick={() => setGuideOpened(true)}
         flex={1}
         miw={{ base: '100%', xs: 220 }}
+      >
+        <Text span size="sm" truncate display="block">
+          {selected?.label ?? `CH ${channel}`}
+        </Text>
+      </Input>
+      <ChannelGuide
+        opened={guideOpened && !scanning}
+        onClose={() => setGuideOpened(false)}
+        bandLabel={BANDS.find((item) => item.value === band)?.label ?? band}
+        channel={channel}
+        channelOptions={channelOptions}
+        now={now}
+        busy={busy}
+        scanning={scanning}
+        onChannel={onChannel}
+        onScan={onScan}
       />
       <Select
         aria-label="Service"

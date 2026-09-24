@@ -63,6 +63,7 @@ export default function App() {
           onBand={session.changeBand}
           channel={session.channel}
           channelOptions={session.channelOptions}
+          now={session.epgNow}
           service={session.service}
           services={session.services}
           programs={session.programs}
@@ -73,6 +74,7 @@ export default function App() {
           onChannel={(value) => void session.changeChannel(value)}
           onService={(value) => void session.changeService(value)}
           onConnect={() => void session.connect()}
+          onScan={() => void session.runScan()}
         />
         <ScanModal
           scanning={session.scanning}

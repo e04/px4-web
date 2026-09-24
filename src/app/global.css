@@ -6,7 +6,11 @@
 
 body {
   margin: 0;
-  background-color: color-mix(in srgb, var(--mantine-color-dark-8) 50%, var(--mantine-color-dark-9));
+  background-color: color-mix(
+    in srgb,
+    var(--mantine-color-dark-8) 50%,
+    var(--mantine-color-dark-9)
+  );
   /* Clip the ambient glow at the viewport edge instead of growing a page-wide
      horizontal scrollbar. Inner scrollers (log, scan list) are unaffected. */
   overflow-x: clip;
@@ -79,8 +83,9 @@ body {
   opacity: 0.5;
 }
 
-/* Frosted-glass Select dropdown (channel/service pickers) */
-.mantine-Select-dropdown {
+/* Frosted-glass Select dropdown and channel guide modal */
+.mantine-Select-dropdown,
+.channel-guide {
   background-color: color-mix(in srgb, var(--mantine-color-body) 82%, transparent);
   backdrop-filter: blur(38px) saturate(1.6);
   -webkit-backdrop-filter: blur(38px) saturate(1.6);
@@ -93,6 +98,30 @@ body {
 
 .mantine-Select-option[data-combobox-selected] {
   background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 70%, transparent);
+}
+
+.channel-guide-header {
+  background-color: transparent;
+}
+
+.channel-guide-station {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: var(--mantine-radius-xs);
+}
+
+.channel-guide-station:hover:not(:disabled) {
+  background-color: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.channel-guide-station[data-selected] {
+  background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 70%, transparent);
+}
+
+.channel-guide-station:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .television-paper .video-controls {
