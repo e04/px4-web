@@ -23,7 +23,6 @@ export function GuideOverlay({ host, onClose, children }: GuideOverlayProps) {
   }, [host, onClose]);
 
   return createPortal(
-    // Clicks must not reach the video, where a PiP click returns the video to the page.
     <div
       className="guide-overlay-backdrop"
       onClick={(event) => {

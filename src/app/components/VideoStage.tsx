@@ -22,6 +22,7 @@ interface VideoStageProps {
   pipEnabled: boolean;
   pipSupported: boolean;
   isFullscreen: boolean;
+  guideOpen: boolean;
   captionEnabled: boolean;
   controlsIdle: boolean;
   volume: number;
@@ -29,7 +30,6 @@ interface VideoStageProps {
   onTogglePip: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
-  onExitPip: () => void;
   /** Set only in fullscreen, where the page's channel guide is out of sight. */
   onToggleGuide?: () => void;
 }
@@ -48,6 +48,7 @@ export function VideoStage({
   pipEnabled,
   pipSupported,
   isFullscreen,
+  guideOpen,
   captionEnabled,
   controlsIdle,
   volume,
@@ -55,7 +56,6 @@ export function VideoStage({
   onTogglePip,
   onToggleFullscreen,
   onVolumeChange,
-  onExitPip,
   onToggleGuide,
 }: VideoStageProps) {
   return (
@@ -69,25 +69,11 @@ export function VideoStage({
         ref={videoPaperRef}
         bg="dark.9"
         className={`television-paper${controlsIdle && playing ? ' is-idle' : ''}`}
-        onClick={() => {
-          if (pipEnabled) onExitPip();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            if (pipEnabled) onExitPip();
-          }
-        }}
-        role={pipEnabled ? 'button' : undefined}
-        tabIndex={pipEnabled ? 0 : -1}
-        aria-pressed={pipEnabled}
-        aria-label={pipEnabled ? 'Exit picture-in-picture' : 'Video'}
-        title={pipEnabled ? 'Click to exit picture-in-picture' : undefined}
         style={{
           aspectRatio: '16 / 9',
           overflow: 'hidden',
           position: 'relative',
-          cursor: controlsIdle && playing ? 'none' : pipEnabled ? 'pointer' : 'default',
+          cursor: controlsIdle && playing ? 'none' : 'default',
         }}
       >
         {busy && (
@@ -118,15 +104,21 @@ export function VideoStage({
           />
         </div>
         {pipEnabled && playing && (
-          <Text
-            c="white"
-            pos="absolute"
-            top="50%"
-            left="50%"
-            style={{ transform: 'translate(-50%, -50%)' }}
+          <div
+            role="img"
+            aria-label="Playing in picture-in-picture"
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              color: 'var(--mantine-color-blue-4)',
+              lineHeight: 0,
+              pointerEvents: 'none',
+            }}
           >
-            Showing in PiP
-          </Text>
+            <PipButtonIcon size={64} />
+          </div>
         )}
         {playing && (
           <>
@@ -158,21 +150,21 @@ export function VideoStage({
             >
               <ActionIcon
                 variant="transparent"
-                color="white"
+                color={captionEnabled ? 'blue' : 'white'}
                 size="lg"
                 aria-label="Subtitles"
                 aria-pressed={captionEnabled}
                 title="Subtitles"
-                style={{ opacity: captionEnabled ? 1 : 0.45 }}
                 onClick={onToggleCaption}
               >
                 <SubtitlesButtonIcon />
               </ActionIcon>
               <ActionIcon
                 variant="transparent"
-                color="white"
+                color={pipEnabled ? 'blue' : 'white'}
                 size="lg"
                 aria-label={pipEnabled ? 'Exit picture-in-picture' : 'Show picture-in-picture'}
+                aria-pressed={pipEnabled}
                 title={
                   pipSupported
                     ? pipEnabled
@@ -188,9 +180,10 @@ export function VideoStage({
               {onToggleGuide && (
                 <ActionIcon
                   variant="transparent"
-                  color="white"
+                  color={guideOpen ? 'blue' : 'white'}
                   size="lg"
                   aria-label="Channel guide"
+                  aria-pressed={guideOpen}
                   title="Channel guide"
                   onClick={onToggleGuide}
                 >
@@ -199,9 +192,10 @@ export function VideoStage({
               )}
               <ActionIcon
                 variant="transparent"
-                color="white"
+                color={isFullscreen ? 'blue' : 'white'}
                 size="lg"
                 aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+                aria-pressed={isFullscreen}
                 title={isFullscreen ? 'Exit full screen' : 'Full screen'}
                 onClick={() => void onToggleFullscreen()}
               >

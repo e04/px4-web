@@ -1,22 +1,26 @@
 import { ActionIcon, Group, Slider, Text } from '@mantine/core';
-import { GuideButtonIcon, SubtitlesButtonIcon } from '../icons';
+import { GuideButtonIcon, PipButtonIcon, SubtitlesButtonIcon } from '../icons';
 
 interface PipControlsProps {
   captionEnabled: boolean;
+  guideOpen: boolean;
   volume: number;
   stationName: string;
   programName: string;
   onToggleCaption: () => void;
+  onExitPip: () => void;
   onVolumeChange: (volume: number) => void;
   onToggleGuide: () => void;
 }
 
 export function PipControls({
   captionEnabled,
+  guideOpen,
   volume,
   stationName,
   programName,
   onToggleCaption,
+  onExitPip,
   onVolumeChange,
   onToggleGuide,
 }: PipControlsProps) {
@@ -31,21 +35,32 @@ export function PipControls({
       >
         <ActionIcon
           variant="transparent"
-          color="white"
+          color={captionEnabled ? 'blue' : 'white'}
           size="lg"
           aria-label="Subtitles"
           aria-pressed={captionEnabled}
           title="Subtitles"
-          style={{ opacity: captionEnabled ? 1 : 0.45 }}
           onClick={onToggleCaption}
         >
           <SubtitlesButtonIcon />
         </ActionIcon>
         <ActionIcon
           variant="transparent"
-          color="white"
+          color="blue"
+          size="lg"
+          aria-label="Exit picture-in-picture"
+          aria-pressed={true}
+          title="Exit picture-in-picture"
+          onClick={onExitPip}
+        >
+          <PipButtonIcon />
+        </ActionIcon>
+        <ActionIcon
+          variant="transparent"
+          color={guideOpen ? 'blue' : 'white'}
           size="lg"
           aria-label="Channel guide"
+          aria-pressed={guideOpen}
           title="Channel guide"
           onClick={onToggleGuide}
         >

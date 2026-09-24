@@ -122,16 +122,14 @@ describe('document PiP helper', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('closes PiP when the PiP window content is clicked', async () => {
-    const { created, pipWindow, parent, next, node } = setup();
+  it('does not register PiP content clicks as a close action', async () => {
+    const { created, pipWindow, parent, node } = setup();
     const onClose = vi.fn();
-    const handle = await openPip(node as unknown as HTMLElement, { onClose });
+    await openPip(node as unknown as HTMLElement, { onClose });
     const wrap = created.find((item) => item.tag === 'div');
-    expect(wrap?.el.listeners.has('click')).toBe(true);
-    wrap?.el.listeners.get('click')!();
-    expect(parent.insertBefore).toHaveBeenCalledWith(node, next);
-    expect(pipWindow.close).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(handle.pipWindow).toBe(pipWindow);
+    expect(wrap?.el.listeners.has('click')).toBe(false);
+    expect(parent.insertBefore).not.toHaveBeenCalled();
+    expect(pipWindow.close).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

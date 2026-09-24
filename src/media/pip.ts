@@ -19,7 +19,7 @@ declare global {
 
 const PIP_CSS = [
   'html,body{margin:0;height:100%;background:#000}',
-  '.pip-wrap{position:relative;width:100vw;height:100vh;background:#000;overflow:hidden;cursor:pointer}',
+  '.pip-wrap{position:relative;width:100vw;height:100vh;background:#000;overflow:hidden}',
   '.pip-wrap .television-canvas{display:block;width:100%;height:100%;object-fit:contain}',
   '.pip-controls{position:absolute;inset:0;pointer-events:none}',
   '.pip-controls .video-controls{opacity:0;transition:opacity .15s ease-in-out}',
@@ -96,6 +96,5 @@ export async function openPip(
     restore();
     options.onClose?.();
   });
-  wrap.addEventListener('click', () => handle.close());
   return handle;
 }

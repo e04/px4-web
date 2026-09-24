@@ -128,6 +128,7 @@ export default function App() {
                 pipEnabled={playback.pipEnabled}
                 pipSupported={playback.pipSupported}
                 isFullscreen={playback.isFullscreen}
+                guideOpen={guideOpen}
                 captionEnabled={playback.captionEnabled}
                 controlsIdle={playback.controlsIdle}
                 volume={playback.volume}
@@ -135,17 +136,18 @@ export default function App() {
                 onTogglePip={() => void playback.togglePip(!playback.pipEnabled)}
                 onToggleFullscreen={() => void playback.toggleFullscreen()}
                 onVolumeChange={playback.setVolume}
-                onExitPip={() => playback.closePip()}
                 onToggleGuide={playback.isFullscreen ? toggleGuide : undefined}
               />
               {playback.pipControlsHost &&
                 createPortal(
                   <PipControls
                     captionEnabled={playback.captionEnabled}
+                    guideOpen={guideOpen}
                     volume={playback.volume}
                     stationName={selectedProgram?.stationName ?? ''}
                     programName={currentProgram?.title ?? ''}
                     onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
+                    onExitPip={playback.closePip}
                     onVolumeChange={playback.setVolume}
                     onToggleGuide={toggleGuide}
                   />,
