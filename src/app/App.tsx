@@ -60,7 +60,6 @@ export default function App() {
         )}
         <TunerBar
           band={session.band}
-          onBand={session.changeBand}
           channel={session.channel}
           channelOptions={session.channelOptions}
           now={session.epgNow}
@@ -74,7 +73,7 @@ export default function App() {
           onChannel={(value) => void session.changeChannel(value)}
           onService={(value) => void session.changeService(value)}
           onConnect={() => void session.connect()}
-          onScan={() => void session.runScan()}
+          onScan={(band) => void session.runScan(band)}
         />
         <ScanModal
           scanning={session.scanning}

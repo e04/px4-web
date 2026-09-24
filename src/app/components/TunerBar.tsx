@@ -1,18 +1,12 @@
 import { useState } from 'react';
 import { Button, Combobox, Group, Input, Select, Text } from '@mantine/core';
+import type { Broadcast } from '../../channels';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import type { ChannelOption } from '../hooks/useReceiverSession';
 import { ChannelGuide } from './ChannelGuide';
 
-const BANDS = [
-  { value: 'T', label: '地デジ' },
-  { value: 'BS', label: 'BS' },
-  { value: 'CS', label: '110°CS' },
-];
-
 interface TunerBarProps {
-  band: string;
-  onBand: (value: string | null) => void;
+  band: Broadcast;
   channel: string;
   channelOptions: ChannelOption[];
   now: number;
@@ -26,12 +20,11 @@ interface TunerBarProps {
   onChannel: (value: string) => void;
   onService: (value: string | null) => void;
   onConnect: () => void;
-  onScan: () => void;
+  onScan: (band: Broadcast) => void;
 }
 
 export function TunerBar({
   band,
-  onBand,
   channel,
   channelOptions,
   now,
@@ -51,15 +44,6 @@ export function TunerBar({
   const selected = channelOptions.find((item) => item.value === channel);
   return (
     <Group align="end" gap="sm">
-      <Select
-        aria-label="Broadcast"
-        value={band}
-        onChange={onBand}
-        data={BANDS}
-        allowDeselect={false}
-        disabled={busy}
-        w={110}
-      />
       <Input
         component="button"
         type="button"
@@ -80,7 +64,7 @@ export function TunerBar({
       <ChannelGuide
         opened={guideOpened && !scanning}
         onClose={() => setGuideOpened(false)}
-        bandLabel={BANDS.find((item) => item.value === band)?.label ?? band}
+        band={band}
         channel={channel}
         channelOptions={channelOptions}
         now={now}

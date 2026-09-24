@@ -23,7 +23,8 @@ function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): Prog
 
 const overlaps = (a: ProgramEvent, b: ProgramEvent) => a.start! < b.end! && b.start! < a.end!;
 
-export function timelineEvents(events: (ProgramEvent | null)[], now: number, start = now) {
+export function timelineEvents(events: (ProgramEvent | null)[], now: number, start = now, hourWidth = 100) {
+  const msPerPx = 3600000 / hourWidth;
   const end = start + 24 * 3600000;
   return collapseEvents(
     events.filter(
@@ -34,8 +35,8 @@ export function timelineEvents(events: (ProgramEvent | null)[], now: number, sta
     .sort((a, b) => a.start! - b.start!)
     .map((event) => ({
       event,
-      left: (Math.max(event.start!, start) - start) / 36000,
-      width: (Math.min(event.end!, end) - Math.max(event.start!, start)) / 36000,
+      left: (Math.max(event.start!, start) - start) / msPerPx,
+      width: (Math.min(event.end!, end) - Math.max(event.start!, start)) / msPerPx,
     }));
 }
 export function currentChannelProgram(epg: EpgMap | undefined, serviceIds: number[], now: number): ProgramEvent | undefined {

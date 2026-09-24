@@ -74,23 +74,26 @@ export function useReceiverSession({
   const [epgNow, setEpgNow] = useState(Date.now());
   const channelOptions = useMemo(
     () =>
-      visibleChannels(scan, band).map((item) => {
-        const entry = scan[String(item)];
-        const epg = channelEpg[String(item)];
-        const serviceIds = entry?.services.map((service) => service.serviceId) ?? [];
-        const event = currentChannelProgram(epg, serviceIds, epgNow);
-        const station = channelLabel(item, entry);
-        return {
-          value: String(item),
-          label: `${station}${event ? ` · ${event.title}` : ''}`,
-          station,
-          name: representativeName(entry),
-          program: event?.title ?? '',
-          // The guide row follows the first service that has any EPG.
-          schedule: epg?.[serviceIds.find((id) => epg[id]?.length) ?? -1] ?? [],
-        };
-      }),
-    [scan, band, channelEpg, epgNow],
+      (['T', 'BS', 'CS'] as const).flatMap((optionBand) =>
+        visibleChannels(scan, optionBand).map((item) => {
+          const entry = scan[String(item)];
+          const epg = channelEpg[String(item)];
+          const serviceIds = entry?.services.map((service) => service.serviceId) ?? [];
+          const event = currentChannelProgram(epg, serviceIds, epgNow);
+          const station = channelLabel(item, entry);
+          return {
+            value: String(item),
+            label: `${station}${event ? ` · ${event.title}` : ''}`,
+            station,
+            name: representativeName(entry),
+            program: event?.title ?? '',
+            // The guide row follows the first service that has any EPG.
+            schedule: epg?.[serviceIds.find((id) => epg[id]?.length) ?? -1] ?? [],
+            band: optionBand,
+          };
+        }),
+      ),
+    [scan, channelEpg, epgNow],
   );
   const [transport, setTransport] = useState<TransportSnapshot>();
   const [programs, setPrograms] = useState<TransportSnapshot['programs']>();
@@ -366,7 +369,7 @@ export function useReceiverSession({
       // BS/CS always have built-in defaults, so only terrestrial auto-scans.
       if (hydratedRef.current && !channelsFor(band).some((item) => scan[String(item)])) {
         addLog('No scan data — starting channel scan');
-        await runScan(true);
+        await runScan(band, true);
         return;
       }
       const result = await session.receiver.tune(channel);
@@ -479,18 +482,11 @@ export function useReceiverSession({
     setStatus('Cancelling scan…');
   };
 
-  const changeBand = (value: string | null) => {
-    if (!value || busy || !['T', 'BS', 'CS'].includes(value)) return;
-    const channels = visibleChannels(scan, value as Broadcast);
-    const first = channels.find((item) => scan[String(item)]?.locked) ?? channels[0];
-    void changeChannel(String(first ?? channelsFor(value as Broadcast)[0]));
-  };
-
-  // Scan the selected broadcast band, persisting station names for channel labels.
+  // Scan a broadcast band (the tuned one by default), persisting station names for channel labels.
   // Works on the live session or connects first when disconnected.
-  const runScan = async (fromConnect = false) => {
+  const runScan = async (scanBand: Broadcast = band, fromConnect = false) => {
     if (scanning || (busy && !fromConnect)) return;
-    const scanChannelsForBand = channelsFor(band);
+    const scanChannelsForBand = channelsFor(scanBand);
     scanAbortRef.current = false;
     setScanCancelling(false);
     const controller = new AbortController();
@@ -516,7 +512,9 @@ export function useReceiverSession({
       if (!session || current !== session) return;
       // Stay on a visible channel: fall back to the first receivable one when
       // the previous channel turned out unreceivable.
-      const fallback = visibleChannels(results, band).find((item) => results[String(item)]?.locked);
+      const fallback = visibleChannels(results, scanBand).find(
+        (item) => results[String(item)]?.locked,
+      );
       const target =
         results[priorChannel]?.locked || !results[priorChannel]
           ? priorChannel
@@ -633,7 +631,6 @@ export function useReceiverSession({
     scan,
     channel,
     band,
-    changeBand,
     service,
     services,
     channelOptions,

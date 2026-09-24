@@ -1,10 +1,12 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
+import type { ProgramEvent } from '../../transport/program-info';
 import { Box, Stack, Text, Tooltip } from '@mantine/core';
 import type { timelineEvents } from '../../epg';
 import { schedule } from '../format';
 
-/** Timeline scale: 100 px per hour over 24 hours. */
-export const TIMELINE_WIDTH = 2400;
+/** Default timeline scale: 100 px per hour over 24 hours. */
+export const HOUR_WIDTH = 100;
+export const TIMELINE_WIDTH = 24 * HOUR_WIDTH;
 
 const timelineClock = new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo',
@@ -16,7 +18,13 @@ export function timelineStart(now: number) {
   return Math.floor(now / 3600000) * 3600000;
 }
 
-export function TimelineHours({ firstHour }: { firstHour: number }) {
+export function TimelineHours({
+  firstHour,
+  hourWidth = HOUR_WIDTH,
+}: {
+  firstHour: number;
+  hourWidth?: number;
+}) {
   return (
     <Box pos="relative" h={12} mb={1} style={{ overflow: 'hidden' }}>
       {Array.from({ length: 24 }, (_, index) => firstHour + index * 3600000).map((hour) => (
@@ -25,7 +33,7 @@ export function TimelineHours({ firstHour }: { firstHour: number }) {
           pos="absolute"
           size="10px"
           lh="12px"
-          style={{ left: (hour - firstHour) / 36000, whiteSpace: 'nowrap' }}
+          style={{ left: ((hour - firstHour) / 3600000) * hourWidth, whiteSpace: 'nowrap' }}
         >
           {timelineClock.format(hour)}
         </Text>
@@ -39,7 +47,10 @@ interface TimelineTrackProps {
   firstHour: number;
   now: number;
   height: number;
+  hourWidth?: number;
   descriptionLines?: number;
+  /** Horizontal pixel range to render; programs outside it are skipped. */
+  range?: readonly [number, number];
 }
 
 export const TimelineTrack = memo(function TimelineTrack({
@@ -47,10 +58,37 @@ export const TimelineTrack = memo(function TimelineTrack({
   firstHour,
   now,
   height,
+  hourWidth = HOUR_WIDTH,
   descriptionLines = 6,
+  range,
 }: TimelineTrackProps) {
+  // One tooltip per track, mounted only while a program is hovered or focused:
+  // a Tooltip per program costs hundreds of ms when a full guide mounts.
+  const [active, setActive] = useState<{ target: HTMLElement; event: ProgramEvent } | null>(null);
+  const hide = () => setActive(null);
   return (
     <Box pos="relative" h={height}>
+      {active && (
+        <Tooltip
+          opened
+          target={active.target}
+          multiline
+          w={300}
+          label={
+            <Stack gap={2}>
+              <Text size="xs" fw={700}>
+                {active.event.title || '—'}
+              </Text>
+              <Text size="xs">{schedule(active.event)}</Text>
+              {active.event.description && (
+                <Text size="xs" style={{ whiteSpace: 'pre-wrap' }}>
+                  {active.event.description}
+                </Text>
+              )}
+            </Stack>
+          }
+        />
+      )}
       {events.length > 0 && events[0]!.left > 0.5 && (
         <Box
           pos="absolute"
@@ -66,69 +104,47 @@ export const TimelineTrack = memo(function TimelineTrack({
           }}
         />
       )}
-      {events.map(({ event, left, width }, index) => (
-        <Tooltip
-          key={`${event.id}:${event.start}`}
-          multiline
-          w={300}
-          label={
-            <Stack gap={2}>
-              <Text size="xs" fw={700}>
-                {event.title || '—'}
-              </Text>
-              <Text size="xs">{schedule(event)}</Text>
-              {event.description && (
-                <Text size="xs" style={{ whiteSpace: 'pre-wrap' }}>
-                  {event.description}
-                </Text>
-              )}
-            </Stack>
-          }
-        >
-          <Box
-            pos="absolute"
-            top={0}
-            h="100%"
-            p={2}
+      {/* Plain elements: a guide renders hundreds of these at once. */}
+      {events.map(({ event, left, width }, index) =>
+        range && (left + width < range[0] || left > range[1]) ? null : (
+          <div
+            key={`${event.id}:${event.start}`}
+            className="timeline-event"
             tabIndex={0}
+            onMouseEnter={(e) => setActive({ target: e.currentTarget, event })}
+            onFocus={(e) => setActive({ target: e.currentTarget, event })}
+            onMouseLeave={hide}
+            onBlur={hide}
             style={{
               left,
               width,
-              overflow: 'hidden',
-              border: '1px solid var(--mantine-color-dark-4)',
               borderLeft:
                 (index === 0 && left > 0.5) ||
                 (index > 0 &&
                   Math.abs(left - (events[index - 1]!.left + events[index - 1]!.width)) < 0.5)
                   ? 'none'
                   : undefined,
-              fontSize: 11,
             }}
           >
-            <Text size="11px" lh={1.2} lineClamp={2} style={{ overflowWrap: 'anywhere' }}>
-              {event.title || '—'}
-            </Text>
+            <div className="timeline-event-title">{event.title || '—'}</div>
             {event.description && descriptionLines > 0 && (
-              <Text
-                size="10px"
-                c="gray.5"
-                lh={1.2}
-                lineClamp={descriptionLines}
-                style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+              <div
+                className="timeline-event-description"
+                style={{ WebkitLineClamp: descriptionLines }}
               >
                 {event.description}
-              </Text>
+              </div>
             )}
-          </Box>
-        </Tooltip>
-      ))}
+          </div>
+        ),
+      )}
       <Box
         pos="absolute"
         top={0}
         h="100%"
         w={2}
         style={{
-          left: (now - firstHour) / 36000,
+          left: ((now - firstHour) / 3600000) * hourWidth,
           background: 'rgba(185, 99, 80, 0.5)',
           pointerEvents: 'none',
         }}
