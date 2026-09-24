@@ -193,6 +193,7 @@ export function ChannelGuide({
       <Group justify="space-between" px="md" mb="sm">
         <SegmentedControl
           aria-label="Broadcast"
+          className="band-switch"
           size="xs"
           fullWidth
           w={210}
@@ -203,9 +204,10 @@ export function ChannelGuide({
         {/* The scan modal lives on the page, out of sight from fullscreen and PiP. */}
         {!fill && (
           <Button
+            className="scan-button"
             size="xs"
-            color="dark"
-            variant="white"
+            color="gray"
+            variant="outline"
             disabled={busy || scanning}
             onClick={() => onScan(viewBand)}
           >
