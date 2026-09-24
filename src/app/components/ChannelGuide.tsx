@@ -3,7 +3,9 @@ import {
   Box,
   Button,
   Group,
+  Loader,
   Paper,
+  Popover,
   SegmentedControl,
   Stack,
   Text,
@@ -11,10 +13,10 @@ import {
 } from '@mantine/core';
 import type { Broadcast } from '../../channels';
 import { stationTimeline, type TimelineItem } from '../../epg';
-import type { ChannelOption } from '../hooks/useReceiverSession';
+import type { ChannelOption, PreviewState, PreviewTarget } from '../hooks/useReceiverSession';
 import { TimelineHours, TimelineTrack, timelineStart } from './ProgramTimeline';
 
-const STATION_WIDTH = 300;
+const STATION_WIDTH = 220;
 const ROW_HEIGHT = 84;
 const ROW_GAP = 4;
 // Rows touch and overlap by the 1px program border so it is not drawn twice.
@@ -24,6 +26,12 @@ const HOUR_WIDTH = 200;
 // Only programs near the viewport are rendered; the window moves in these steps
 // so scrolling re-renders rarely.
 const CULL_STEP = 512;
+
+const PREVIEW_WIDTH = 384;
+const PREVIEW_OPEN_DELAY = 400;
+// The tuner outlives the popup this long, so re-entering the row (or crossing
+// the gap between the columns) shows the same preview again without retuning.
+const PREVIEW_RELEASE_DELAY = 300;
 
 const NO_EVENTS: TimelineItem[] = [];
 
@@ -41,8 +49,45 @@ interface ChannelGuideProps {
   now: number;
   busy: boolean;
   scanning: boolean;
+  previewAvailable: boolean;
+  previewState: PreviewState;
+  previewCanvas: HTMLCanvasElement;
   onSelect: (channel: string, serviceId: number | null) => void;
   onScan: (band: Broadcast) => void;
+  onPreview: (target: PreviewTarget | null) => void;
+}
+
+function StationPreview({ canvas, state }: { canvas: HTMLCanvasElement; state: PreviewState }) {
+  return (
+    <Box
+      pos="relative"
+      w={PREVIEW_WIDTH}
+      bg="black"
+      style={{ aspectRatio: '16 / 9', overflow: 'hidden' }}
+      aria-label="Station preview"
+    >
+      <Box
+        w="100%"
+        h="100%"
+        className="station-preview-canvas"
+        style={{ visibility: state === 'playing' ? undefined : 'hidden' }}
+        ref={(node: HTMLDivElement | null) => {
+          if (node && canvas.parentNode !== node) node.appendChild(canvas);
+        }}
+      />
+      {state !== 'playing' && (
+        <Group pos="absolute" inset={0} justify="center">
+          {state === 'tuning' ? (
+            <Loader size="sm" color="gray" />
+          ) : (
+            <Text size="xs" c="dimmed">
+              Preview unavailable
+            </Text>
+          )}
+        </Group>
+      )}
+    </Box>
+  );
 }
 
 export function ChannelGuide({
@@ -53,8 +98,12 @@ export function ChannelGuide({
   now,
   busy,
   scanning,
+  previewAvailable,
+  previewState,
+  previewCanvas,
   onSelect,
   onScan,
+  onPreview,
 }: ChannelGuideProps) {
   // Browsing another band only changes the list; tuning waits for a station click.
   const [viewBand, setViewBand] = useState(band);
@@ -86,6 +135,41 @@ export function ChannelGuide({
     if (top < list.scrollTop || top + row.offsetHeight > list.scrollTop + list.clientHeight)
       list.scrollTop = top - (list.clientHeight - row.offsetHeight) / 2;
   }, [selectedValue, viewBand]);
+
+  // Hovering a station or its timeline previews it; the popup opens after a pause
+  // so sweeping across rows does not retune the free tuner for each one.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [previewed, setPreviewed] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setPreviewed(hovered),
+      hovered ? PREVIEW_OPEN_DELAY : PREVIEW_RELEASE_DELAY,
+    );
+    return () => window.clearTimeout(timer);
+  }, [hovered]);
+  // The tuned station is already on screen; unscanned ones have no service.
+  const previewOption = rows.find(
+    ({ option }) =>
+      option.value === previewed && option.value !== selectedValue && option.serviceId != null,
+  )?.option;
+  const previewValue = previewAvailable && !busy ? previewOption?.value : undefined;
+  useEffect(() => {
+    onPreview(
+      previewValue && previewOption?.serviceId != null
+        ? {
+            value: previewValue,
+            channel: previewOption.channel,
+            serviceId: previewOption.serviceId,
+          }
+        : null,
+    );
+    // The target is keyed by row value; the option object is rebuilt on every EPG update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewValue]);
+  const hover = (value: string) => ({
+    onMouseEnter: () => setHovered(value),
+    onMouseLeave: () => setHovered((current) => (current === value ? null : current)),
+  });
 
   const select = (option: ChannelOption, serviceId = option.serviceId) => {
     if (option.value !== selectedValue || String(serviceId) !== service)
@@ -129,30 +213,53 @@ export function ChannelGuide({
             {rows.map(({ option }, index) => {
               const selected = option.value === selectedValue;
               return (
-                <UnstyledButton
+                <Popover
                   key={option.value}
-                  mt={index ? ROW_OVERLAP : 0}
-                  ref={selected ? selectedRef : undefined}
-                  className="channel-guide-station"
-                  data-selected={selected || undefined}
-                  h={ROW_HEIGHT}
-                  px="sm"
-                  disabled={busy}
-                  aria-current={selected || undefined}
-                  onClick={() => select(option)}
+                  // Hidden as soon as the pointer leaves the row.
+                  opened={option.value === previewValue && option.value === hovered}
+                  position="top-start"
+                  offset={4}
+                  shadow="md"
+                  transitionProps={{ duration: 0 }}
                 >
-                  <Group gap="xs" wrap="nowrap">
-                    {/* Placeholder keeps names aligned with rows that have a logo. */}
-                    {option.logo ? (
-                      <img className="station-logo" src={option.logo} alt="" />
-                    ) : (
-                      <span className="station-logo station-logo-placeholder" aria-hidden="true" />
-                    )}
-                    <Text size="sm" fw={700} miw={0} truncate>
-                      {option.name || option.number}
-                    </Text>
-                  </Group>
-                </UnstyledButton>
+                  <Popover.Target>
+                    <UnstyledButton
+                      mt={index ? ROW_OVERLAP : 0}
+                      ref={selected ? selectedRef : undefined}
+                      className="channel-guide-station"
+                      data-selected={selected || undefined}
+                      h={ROW_HEIGHT}
+                      px="sm"
+                      disabled={busy}
+                      aria-current={selected || undefined}
+                      onClick={() => select(option)}
+                      {...hover(option.value)}
+                    >
+                      <Group gap="xs" wrap="nowrap">
+                        {/* Placeholder keeps names aligned with rows that have a logo. */}
+                        {option.logo ? (
+                          <img className="station-logo" src={option.logo} alt="" />
+                        ) : (
+                          <span
+                            className="station-logo station-logo-placeholder"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <Text size="sm" fw={700} miw={0} truncate>
+                          {option.name || option.number}
+                        </Text>
+                      </Group>
+                    </UnstyledButton>
+                  </Popover.Target>
+                  {/* Pointer events pass through so the rows beneath stay hoverable. */}
+                  <Popover.Dropdown
+                    p={0}
+                    bd={0}
+                    style={{ overflow: 'hidden', pointerEvents: 'none' }}
+                  >
+                    <StationPreview canvas={previewCanvas} state={previewState} />
+                  </Popover.Dropdown>
+                </Popover>
               );
             })}
           </Stack>
@@ -175,6 +282,7 @@ export function ChannelGuide({
                     mt={index ? ROW_OVERLAP : 0}
                     pos="relative"
                     style={{ cursor: busy ? undefined : 'pointer' }}
+                    {...hover(option.value)}
                     // A program in a sub-service lane tunes that service.
                     onClick={(event) => {
                       if (busy) return;

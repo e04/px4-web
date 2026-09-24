@@ -4,6 +4,7 @@ import { B25Worker } from '../src/media/b25-client';
 import { T1Card } from '../src/card/t1';
 import { Receiver } from '../src/driver/receiver';
 import { px4UsbFilters } from '../src/usb/px4-devices';
+import { STREAM_TRANSFERS } from '../src/usb/stream';
 
 const mocks = vi.hoisted(() => ({
   mask: vi.fn(async () => {}),
@@ -167,7 +168,7 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
     device.transferIn.mock.invocationCallOrder[0],
   );
   expect(device.transferIn.mock.calls[0]).toEqual([4, 188 * 816]);
-  expect(pending).toHaveLength(4);
+  expect(pending).toHaveLength(STREAM_TRANSFERS);
   expect(session.receiver.state).toBe('streaming');
   vi.spyOn(session.receiver, 'tune').mockImplementation(async () => {
     session.receiver.state = 'locked';
@@ -180,7 +181,7 @@ it('retunes on the same USB session without reconnecting, and rejects reuse afte
   expect(session.receiver.tune).toHaveBeenCalledWith(26);
   expect(device.close).not.toHaveBeenCalled();
   expect(mocks.workerClose).toHaveBeenCalledTimes(1);
-  expect(pending).toHaveLength(8);
+  expect(pending).toHaveLength(STREAM_TRANSFERS * 2);
   expect(mocks.mask).toHaveBeenCalledTimes(4);
   expect(session.receiver.state).toBe('streaming');
   await session.close();

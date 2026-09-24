@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { STREAM_TRANSFER_BYTES, UsbTsStream } from '../src/usb/stream';
+import { STREAM_TRANSFERS, STREAM_TRANSFER_BYTES, UsbTsStream } from '../src/usb/stream';
 
 const result = (byte: number): USBInTransferResult => ({
   status: 'ok',
@@ -18,7 +18,7 @@ describe('ordered bounded TS Bulk IN', () => {
       seen.push(new Uint8Array(bytes)[0]);
       if (seen.length === 2) stream.stop();
     });
-    expect(transferIn).toHaveBeenCalledTimes(4);
+    expect(transferIn).toHaveBeenCalledTimes(STREAM_TRANSFERS);
     expect(transferIn).toHaveBeenCalledWith(4, STREAM_TRANSFER_BYTES);
     resolves[1](result(2));
     await Promise.resolve();

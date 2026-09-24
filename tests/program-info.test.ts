@@ -114,8 +114,12 @@ const snapshot = (info: ProgramInformation, id = sid) => info.snapshot()[id];
 describe('program information', () => {
   it('collects future schedule EIT and ignores other-network schedule', () => {
     const info = new ProgramInformation();
-    info.pushPacket(single(0x12, eit({ table: 0x50, title: 'Future', date: Date.UTC(2027, 0, 1) })));
-    info.pushPacket(single(0x12, eit({ table: 0x60, title: 'Other', date: Date.UTC(2027, 0, 1) }), 1));
+    info.pushPacket(
+      single(0x12, eit({ table: 0x50, title: 'Future', date: Date.UTC(2027, 0, 1) })),
+    );
+    info.pushPacket(
+      single(0x12, eit({ table: 0x60, title: 'Other', date: Date.UTC(2027, 0, 1) }), 1),
+    );
     expect(snapshot(info)?.future.map((event) => event.title)).toEqual(['Future']);
   });
   it('decodes station name and present/following with JST times for the selected service', () => {

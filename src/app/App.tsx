@@ -136,6 +136,10 @@ export default function App() {
                 scanning={session.scanning}
                 onSelect={(channel, serviceId) => void session.selectStation(channel, serviceId)}
                 onScan={(band) => void session.runScan(band)}
+                previewAvailable={session.previewAvailable}
+                previewState={session.previewState}
+                previewCanvas={session.previewCanvas}
+                onPreview={session.setPreviewTarget}
               />
               <MetricsGrid
                 transport={session.transport}

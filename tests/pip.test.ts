@@ -134,5 +134,4 @@ describe('document PiP helper', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(handle.pipWindow).toBe(pipWindow);
   });
-
 });

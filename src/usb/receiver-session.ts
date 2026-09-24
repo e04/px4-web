@@ -11,12 +11,31 @@ import { T1Card } from '../card/t1';
 import { B25Worker } from '../media/b25-client';
 import type { Channel } from '../channels';
 
+/** Remove 188-byte packets whose transport_scrambling_control bits are set. */
+function dropScrambled(bytes: ArrayBuffer): { clear: ArrayBuffer; dropped: number } {
+  const input = new Uint8Array(bytes);
+  let length = 0;
+  for (let offset = 0; offset + 188 <= input.length; offset += 188) {
+    if (input[offset + 3] & 0xc0) continue;
+    if (length !== offset) input.copyWithin(length, offset, offset + 188);
+    length += 188;
+  }
+  return { clear: bytes.slice(0, length), dropped: Math.floor(input.length / 188) - length / 188 };
+}
+
 export class ReceiverSession {
   private closing?: Promise<void>;
   private worker?: TransportWorker;
   // Auxiliary tuner demux; rebuilt per EPG channel so no PSI crosses multiplexes.
   private epgWorker?: TransportWorker;
   epgTransport?: TransportSnapshot;
+  // Descrambler for a station previewed on the auxiliary tuner; shares the card.
+  private previewB25?: B25Worker;
+  private previewDropped = 0;
+  // Two B25 filters (playback and preview) share one card, which takes one APDU at a
+  // time. Playback goes first: its B25 stalls the USB stream while it waits for a key.
+  private cardBusy = false;
+  private cardWaiting: { run: () => void; main: boolean }[] = [];
   private stream?: UsbTsStream;
   card?: T1Card;
   b25?: B25Worker;
@@ -217,13 +236,107 @@ export class ReceiverSession {
    * USB stream, so data only arrives while the main tuner is receiving.
    */
   async epgTune(channel: Channel): Promise<boolean> {
-    this.epgWorker?.close();
-    this.epgWorker = undefined;
-    this.epgTransport = undefined;
+    this.releaseAuxiliary();
     if (this.closing) throw new Error('Session closed');
     if (!(await this.receiver.auxiliaryTune(channel)) || this.closing) return false;
     this.epgWorker = new TransportWorker(undefined, Receiver.auxiliaryIndex(channel));
     return true;
+  }
+
+  /** A preview needs the free tuner and a card already opened by main playback. */
+  get previewReady(): boolean {
+    return this.hasEpgTuner && !!this.card?.atr && !this.closing;
+  }
+
+  /**
+   * Descramble one service on the auxiliary tuner, handing clear TS to
+   * `onOutput`. Resolves false when the channel does not lock.
+   */
+  async startPreview(
+    channel: Channel,
+    serviceId: number,
+    onOutput: (bytes: ArrayBuffer) => void,
+  ): Promise<boolean> {
+    this.releaseAuxiliary();
+    const card = this.card;
+    if (this.closing) throw new Error('Session closed');
+    if (!card?.atr) throw new Error('Start playback first so the card is ready');
+    if (!(await this.receiver.auxiliaryTune(channel)) || this.closing) return false;
+    const b25 = (this.previewB25 = new B25Worker((bytes) =>
+      this.withCard(() => card.transmit(bytes), false),
+    ));
+    await b25.request('open', { serviceId, emm: false });
+    if (this.previewB25 !== b25) throw new Error('Preview superseded');
+    this.previewDropped = 0;
+    // Until the card's key applies (at startup and around key changes) B25 passes
+    // packets through still scrambled; the player rejects those, so drop them here.
+    b25.onOutput = (bytes) => {
+      if (this.previewB25 !== b25) return;
+      const { clear, dropped } = dropScrambled(bytes);
+      this.previewDropped += dropped;
+      if (clear.byteLength) onOutput(clear);
+    };
+    await b25.request('playback', { enabled: true });
+    // Returning the push keeps the demux's bounded queue as backpressure; a slow
+    // descrambler drops chunks there instead of overflowing B25.
+    const worker = (this.epgWorker = new TransportWorker(
+      (bytes) => b25.push(bytes).catch(() => {}),
+      Receiver.auxiliaryIndex(channel),
+    ));
+    await worker.request('forward');
+    return true;
+  }
+
+  get previewError(): string | undefined {
+    return this.previewB25?.error;
+  }
+
+  /** One-line counters along the preview chain, for diagnosing a stalled preview. */
+  async previewDiagnostics(): Promise<string> {
+    const worker = this.epgWorker;
+    const b25 = this.previewB25;
+    const transport = worker
+      ? (await worker.request('snapshot').catch(() => undefined))?.snapshot
+      : undefined;
+    const clear =
+      b25 && !b25.error
+        ? (await b25.request('snapshot').catch(() => undefined))?.snapshot
+        : b25?.snapshot;
+    return [
+      `main receiving=${this.receiving}`,
+      `ts packets=[${transport?.packetsByReceiver.join(',') ?? '-'}]`,
+      `b25 in=${clear?.inputBytes ?? '-'} out=${clear?.outputBytes ?? '-'} found=${clear?.found ?? '-'} scrambled=${clear?.scrambled ?? '-'}`,
+      `dropped scrambled=${this.previewDropped}`,
+      `card apdus=${this.card?.stats.apdus ?? '-'} failures=${this.card?.stats.failures ?? '-'}`,
+      b25?.error && `b25 error=${b25.error}`,
+    ]
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  private releaseAuxiliary(): void {
+    this.epgWorker?.close();
+    this.epgWorker = undefined;
+    this.epgTransport = undefined;
+    this.previewB25?.close();
+    this.previewB25 = undefined;
+  }
+
+  private withCard<T>(operation: () => Promise<T>, main = true): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        this.cardBusy = true;
+        operation()
+          .then(resolve, reject)
+          .finally(() => {
+            this.cardBusy = false;
+            const index = this.cardWaiting.findIndex((waiting) => waiting.main);
+            this.cardWaiting.splice(Math.max(index, 0), 1)[0]?.run();
+          });
+      };
+      if (this.cardBusy) this.cardWaiting.push({ run, main });
+      else run();
+    });
   }
 
   async refreshEpgTransport(): Promise<void> {
@@ -234,9 +347,7 @@ export class ReceiverSession {
   }
 
   async stopEpgTuner(): Promise<void> {
-    this.epgWorker?.close();
-    this.epgWorker = undefined;
-    this.epgTransport = undefined;
+    this.releaseAuxiliary();
     if (!this.closing) await this.receiver.auxiliaryStop();
   }
 
@@ -284,9 +395,9 @@ export class ReceiverSession {
     const card = (this.card ??= new T1Card(new CardUart(bridge)));
     this.fileDecoding = !!file;
     try {
-      if (!card.atr) await card.open();
+      if (!card.atr) await this.withCard(() => card.open());
       check();
-      const b25 = (this.b25 = new B25Worker((bytes) => card.transmit(bytes)));
+      const b25 = (this.b25 = new B25Worker((bytes) => this.withCard(() => card.transmit(bytes))));
       await b25.request('open', { serviceId, emm, file: !!file });
       check();
       this.b25ServiceId = serviceId;
@@ -339,8 +450,7 @@ export class ReceiverSession {
     this.stream?.stop();
     this.card?.invalidate();
     this.b25?.close();
-    this.epgWorker?.close();
-    this.epgWorker = undefined;
+    this.releaseAuxiliary();
     this.closing = (async () => {
       let first: unknown;
       try {

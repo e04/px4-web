@@ -144,6 +144,13 @@ body {
   background-color: color-mix(in srgb, currentColor 10%, transparent);
 }
 
+.station-preview-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .channel-guide-station:hover:not(:disabled) {
   background-color: color-mix(in srgb, currentColor 14%, transparent);
 }

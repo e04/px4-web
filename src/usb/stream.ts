@@ -1,7 +1,9 @@
 import { withTimeout } from '../driver/bridge';
 
 export const STREAM_TRANSFER_BYTES = 188 * 816;
-export const STREAM_TRANSFERS = 4;
+// With the free tuner running both TS share this stream; the extra reads keep the
+// device FIFO drained while playback briefly waits on the card.
+export const STREAM_TRANSFERS = 8;
 
 // WebUSB has no abortable transferIn. A new loop needs all physical reads to settle;
 // if they cannot, the owner closes the device before reusing the endpoint.

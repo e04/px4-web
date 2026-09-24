@@ -107,7 +107,8 @@ export const TimelineTrack = memo(function TimelineTrack({
       {events.map(({ event, left, width, serviceId, lane = 0, lanes = 1 }, index) =>
         range && (left + width < range[0] || left > range[1]) ? null : (
           <div
-            key={`${event.id}:${event.start}`}
+            // Sub-services of one station can air the same event_id in their own lanes.
+            key={`${serviceId}:${event.id}:${event.start}`}
             className="timeline-event"
             data-service={serviceId}
             tabIndex={0}

@@ -26,6 +26,7 @@ import type { ProgramInfo } from '../../transport/program-info';
 import { logoDataUrl, logoKey, type LogoData } from '../../logo';
 import { loadLogos, mergeLogos, type LogoLibrary } from '../../logo-store';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
+import { FullSegPlayer } from '../../media/player';
 
 export type ChannelOption = ReturnType<typeof useReceiverSession>['channelOptions'][number];
 
@@ -34,6 +35,18 @@ export interface ScanProgress {
   total: number;
   channel: Channel;
 }
+
+export interface PreviewTarget {
+  value: string;
+  channel: string;
+  serviceId: number;
+}
+
+export type PreviewState = 'tuning' | 'playing' | 'failed';
+
+// The EPG crawl resumes only after the pointer has been off the guide this long,
+// so moving between rows does not retune the free tuner in between.
+const CRAWL_RESUME_MS = 5000;
 
 export interface ScanResult {
   channel: Channel;
@@ -155,7 +168,14 @@ export function useReceiverSession({
   const [b25, setB25] = useState<Record<string, number | boolean | undefined>>();
   const scanRef = useRef(scan);
   scanRef.current = scan;
-  const crawlDoneRef = useRef<Promise<void>>(Promise.resolve());
+  // The free tuner serves one of the EPG crawl or a preview; each waits for the previous user.
+  const auxDoneRef = useRef<Promise<void>>(Promise.resolve());
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  // Keyed by row so a newly opened popup never shows the previous station's state.
+  const [preview, setPreview] = useState<{ value: string; state: PreviewState }>();
+  const [crawlHeld, setCrawlHeld] = useState(false);
+  // One detached canvas the preview popup adopts; the player keeps drawing into it.
+  const previewCanvas = useMemo(() => document.createElement('canvas'), []);
   const firmwareRef = useRef<FirmwareImage | undefined>(undefined);
 
   // The binary is bundled at build time: fetch once, reuse for the session.
@@ -381,9 +401,9 @@ export function useReceiverSession({
   // for EPG while the main tuner plays. Scans own the device, so crawl pauses.
   useEffect(() => {
     const session = sessionRef.current;
-    if (!connected || scanning || !session?.hasEpgTuner) return;
+    if (!connected || scanning || crawlHeld || !session?.hasEpgTuner) return;
     const controller = new AbortController();
-    const previous = crawlDoneRef.current;
+    const previous = auxDoneRef.current;
     // Wait for a missing logo once per channel; CDT repeats far less often than EIT.
     const logoWaited = new Set<string>();
     const done = previous.then(() =>
@@ -413,11 +433,123 @@ export function useReceiverSession({
         onRound: (count) => addLog(`EPG crawl round complete (${count} channels)`),
       }),
     );
-    crawlDoneRef.current = done.catch(() => {});
+    auxDoneRef.current = done.catch(() => {});
     return () => controller.abort();
     // Session identity changes always toggle `connected`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, scanning]);
+  }, [connected, scanning, crawlHeld]);
+
+  useEffect(() => {
+    if (previewTarget) {
+      setCrawlHeld(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setCrawlHeld(false), CRAWL_RESUME_MS);
+    return () => window.clearTimeout(timer);
+  }, [previewTarget]);
+
+  // A hovered guide row plays muted on the free tuner, interrupting the crawl.
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!previewTarget || !connected || scanning || !session?.previewReady) return;
+    const { value, channel: previewChannel, serviceId } = previewTarget;
+    const setPreviewState = (state: PreviewState) => setPreview({ value, state });
+    let stopped = false;
+    let player: FullSegPlayer | undefined;
+    // Every step is logged with its elapsed time so a failing preview can be traced.
+    const started = performance.now();
+    let stage = 'waiting for tuner';
+    const log = (message: string, error = false) =>
+      addLog(
+        `Preview CH ${previewChannel}/${serviceId} +${Math.round(performance.now() - started)}ms: ${message}`,
+        error,
+      );
+    const playerDiagnostics = () => {
+      const snapshot = player?.snapshot;
+      return `player frames=${snapshot?.videoFrames ?? '-'} rendered=${snapshot?.rendered ?? '-'} packets=${snapshot?.packets ?? '-'} resyncs=${snapshot?.resyncs ?? '-'} resets=${snapshot?.resets ?? '-'} ccErrors=${snapshot?.ccErrors ?? '-'}${snapshot?.error ? ` error=${snapshot.error}` : ''}`;
+    };
+    const diagnose = async () =>
+      `${stage}; ${await session.previewDiagnostics().catch((error) => String(error))}; ${playerDiagnostics()}`;
+    let failedLogged = false;
+    const fail = (reason: string) => {
+      if (stopped || failedLogged) return;
+      failedLogged = true;
+      setPreviewState('failed');
+      void diagnose().then((detail) => log(`failed: ${reason} (${detail})`, true));
+    };
+    // Damage the preview causes on the main stream shows up in these counters.
+    const mainLoss = () => {
+      const transport = session.transport;
+      return transport
+        ? [transport.syncLosses, transport.discardedBytes, transport.ccErrors]
+        : undefined;
+    };
+    const lossBefore = mainLoss();
+    let playing = false;
+    setPreviewState('tuning');
+    // Drop the previous station's last frame.
+    previewCanvas.width = 0;
+    log('requested');
+    const done = auxDoneRef.current.then(async () => {
+      if (stopped) return;
+      stage = 'opening player';
+      const current = new FullSegPlayer(previewCanvas);
+      player = current;
+      current.setVolume(0);
+      current.onFirstFrame = () => {
+        if (stopped) return;
+        playing = true;
+        stage = 'playing';
+        log('first frame');
+        setPreviewState('playing');
+      };
+      await current.open(serviceId);
+      if (stopped) return;
+      stage = 'tuning';
+      const locked = await session.startPreview(previewChannel, serviceId, (bytes) => {
+        void current.push(bytes).catch(() => {});
+      });
+      if (!locked) throw new Error('The channel could not be locked.');
+      if (stopped) return;
+      stage = 'waiting for first frame';
+      log('tuned');
+    });
+    const failed = done.catch((error) =>
+      fail(error instanceof Error ? error.message : String(error)),
+    );
+    let slowLogged = false;
+    const poll = window.setInterval(() => {
+      if (player?.closed) fail(`player closed: ${player.error ?? 'unknown'}`);
+      else if (session.previewError) fail(`B25: ${session.previewError}`);
+      else if (!playing && !slowLogged && performance.now() - started > 10000) {
+        slowLogged = true;
+        void diagnose().then((detail) => !stopped && log(`no frame after 10s (${detail})`));
+      }
+    }, 1000);
+    let release = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    // The next user of the free tuner starts once this preview is closed and the tuner asleep.
+    auxDoneRef.current = Promise.all([failed, released])
+      .then(() => session.stopEpgTuner())
+      .catch(() => {});
+    return () => {
+      if (!playing && !failedLogged) log(`closed while ${stage}`);
+      const lossAfter = mainLoss();
+      if (lossBefore && lossAfter && lossAfter.some((value, index) => value > lossBefore[index]!))
+        log(
+          `main stream during preview: sync losses +${lossAfter[0]! - lossBefore[0]!}, discarded bytes +${lossAfter[1]! - lossBefore[1]!}, CC errors +${lossAfter[2]! - lossBefore[2]!}`,
+          true,
+        );
+      stopped = true;
+      release();
+      window.clearInterval(poll);
+      player?.close();
+      // Also covers a player created after this cleanup, while the chain was pending.
+      void done.finally(() => player?.close()).catch(() => {});
+    };
+    // Session identity changes always toggle `connected`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewTarget, connected, scanning]);
 
   const onReceiverEvent = (event: ReceiverEvent) => {
     const label = stateLabels[event.state] ?? event.state;
@@ -759,6 +891,11 @@ export function useReceiverSession({
     deviceLabel,
     cardless,
     b25,
+    previewTarget,
+    previewState: (preview?.value === previewTarget?.value && preview?.state) || 'tuning',
+    previewCanvas,
+    previewAvailable: connected && !scanning && !!sessionRef.current?.previewReady,
+    setPreviewTarget,
     connect,
     selectStation,
     cancelScan,

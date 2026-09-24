@@ -16,6 +16,12 @@ export function readTimestamp(b: Uint8Array, offset: number): number {
     (b[offset + 4] >>> 1)
   );
 }
+/** Whether an MPEG-2 video elementary stream chunk carries a sequence header (00 00 01 B3). */
+export function hasSequenceHeader(bytes: Uint8Array): boolean {
+  for (let i = 0; i + 3 < bytes.length; i++)
+    if (!bytes[i] && !bytes[i + 1] && bytes[i + 2] === 1 && bytes[i + 3] === 0xb3) return true;
+  return false;
+}
 export interface Pes {
   kind: 'video' | 'audio' | 'caption' | 'super';
   bytes: Uint8Array;
@@ -41,6 +47,9 @@ export class PlaybackDemux {
   private signature = '';
   private reference?: number;
   private lastPcr?: number;
+  // A reset decoder cannot size pictures before a sequence header; FFmpeg would
+  // reject (and log) every one until the next GOP, so earlier video is dropped here.
+  private videoSynced = false;
   constructor(
     readonly serviceId: number,
     private output: (pes: Pes) => void,
@@ -54,6 +63,7 @@ export class PlaybackDemux {
     this.assemblies.clear();
     this.reference = undefined;
     this.lastPcr = undefined;
+    this.videoSynced = false;
     this.stats.resets++;
     this.reset();
   }
@@ -212,6 +222,10 @@ export class PlaybackDemux {
       dts = flags === 3 ? unwrapTimestamp(readTimestamp(b, 14), pts) : pts;
     }
     if (captionTarget && pts < 0) pts = dts = this.reference ?? 0;
+    if (pid === this.video && !this.videoSynced) {
+      if (!hasSequenceHeader(b.subarray(header, end))) return;
+      this.videoSynced = true;
+    }
     this.stats.pes++;
     this.output({
       kind:

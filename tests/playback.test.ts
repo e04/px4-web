@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { PlaybackDemux, readTimestamp, unwrapTimestamp, type Pes } from '../src/media/demux';
+import {
+  PlaybackDemux,
+  hasSequenceHeader,
+  readTimestamp,
+  unwrapTimestamp,
+  type Pes,
+} from '../src/media/demux';
 import { PcmQueue } from '../src/media/pcm-queue';
 import createDecoder from '../src/media/generated/decoder.js';
 import { videoFrameInit } from '../src/media/video-frame';
@@ -64,6 +70,22 @@ describe('broadcast timestamps and PES', () => {
     expect(resets).toBeGreaterThan(1);
     damaged[3] |= 128;
     expect(() => d.push(damaged)).toThrow(/scrambled/);
+  });
+  it('holds video after a reset until a sequence header', () => {
+    expect(hasSequenceHeader(new Uint8Array([0, 0, 1, 0xb3]))).toBe(true);
+    expect(hasSequenceHeader(new Uint8Array([0, 0, 1, 0x00, 0, 0, 1]))).toBe(false);
+    const input = fixture(),
+      pes: Pes[] = [];
+    const d = new PlaybackDemux(
+      1,
+      (p) => pes.push(p),
+      () => {},
+    );
+    d.push(input);
+    d.flush();
+    const video = pes.filter((p) => p.kind === 'video');
+    expect(video.length).toBeGreaterThan(0);
+    expect(hasSequenceHeader(video[0]!.bytes)).toBe(true);
   });
   it('ignores exact TS duplicates but resets when the same CC carries different bytes', () => {
     const input = fixture();
