@@ -171,6 +171,10 @@ body {
   background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 70%, transparent);
 }
 
+.channel-guide-track[data-selected] {
+  background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 18%, transparent);
+}
+
 .channel-guide-station:disabled {
   cursor: not-allowed;
   opacity: 0.6;

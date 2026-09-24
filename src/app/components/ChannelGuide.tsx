@@ -29,7 +29,7 @@ const CULL_STEP = 512;
 
 const PREVIEW_WIDTH = 384;
 const PREVIEW_OFFSET = 4;
-const PREVIEW_OPEN_DELAY = 400;
+const PREVIEW_OPEN_DELAY = 50;
 // The tuner outlives the popup this long, so re-entering the row (or crossing
 // the gap between the columns) shows the same preview again without retuning.
 const PREVIEW_RELEASE_DELAY = 300;
@@ -367,6 +367,8 @@ export function ChannelGuide({
                     key={option.value}
                     mt={index ? ROW_OVERLAP : 0}
                     pos="relative"
+                    className="channel-guide-track"
+                    data-selected={option.value === selectedValue || undefined}
                   >
                     <TimelineTrack
                       events={shown ? events : NO_EVENTS}
