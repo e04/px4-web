@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { ProgramEvent } from '../../transport/program-info';
 import { Box, Stack, Text, Tooltip } from '@mantine/core';
 import type { TimelineItem } from '../../epg';
@@ -50,6 +50,8 @@ interface TimelineTrackProps {
   descriptionLines?: number;
   /** Horizontal pixel range to render; programs outside it are skipped. */
   range?: readonly [number, number];
+  /** Where the program tooltip is mounted; defaults to the page body. */
+  portalTarget?: HTMLElement | undefined;
 }
 
 export const TimelineTrack = memo(function TimelineTrack({
@@ -60,19 +62,24 @@ export const TimelineTrack = memo(function TimelineTrack({
   hourWidth = HOUR_WIDTH,
   descriptionLines = 6,
   range,
+  portalTarget,
 }: TimelineTrackProps) {
   // One tooltip per track, mounted only while a program is hovered or focused:
   // a Tooltip per program costs hundreds of ms when a full guide mounts.
   const [active, setActive] = useState<{ target: HTMLElement; event: ProgramEvent } | null>(null);
   const hide = () => setActive(null);
+  // Mantine checks `target instanceof HTMLElement`, which fails for elements of the PiP
+  // window's own realm, leaving the tooltip at 0,0; a ref object skips that check.
+  const targetRef = useMemo(() => ({ current: active?.target ?? null }), [active?.target]);
   return (
     <Box pos="relative" h={height}>
       {active && (
         <Tooltip
           opened
-          target={active.target}
+          target={targetRef}
           multiline
           w={300}
+          portalProps={portalTarget ? { target: portalTarget } : undefined}
           label={
             <Stack gap={2}>
               <Text size="xs" fw={700}>

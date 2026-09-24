@@ -1,6 +1,7 @@
 import type { RefObject } from 'react';
 import { ActionIcon, Box, Group, Paper, Progress, Slider, Text } from '@mantine/core';
 import {
+  GuideButtonIcon,
   MaximizeButtonIcon,
   MinimizeButtonIcon,
   PipButtonIcon,
@@ -29,6 +30,8 @@ interface VideoStageProps {
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
   onExitPip: () => void;
+  /** Set only in fullscreen, where the page's channel guide is out of sight. */
+  onToggleGuide?: () => void;
 }
 
 export function VideoStage({
@@ -53,6 +56,7 @@ export function VideoStage({
   onToggleFullscreen,
   onVolumeChange,
   onExitPip,
+  onToggleGuide,
 }: VideoStageProps) {
   return (
     <Box className="television-ambient-wrap">
@@ -181,6 +185,18 @@ export function VideoStage({
               >
                 <PipButtonIcon />
               </ActionIcon>
+              {onToggleGuide && (
+                <ActionIcon
+                  variant="transparent"
+                  color="white"
+                  size="lg"
+                  aria-label="Channel guide"
+                  title="Channel guide"
+                  onClick={onToggleGuide}
+                >
+                  <GuideButtonIcon />
+                </ActionIcon>
+              )}
               <ActionIcon
                 variant="transparent"
                 color="white"

@@ -55,6 +55,10 @@ interface ChannelGuideProps {
   onSelect: (channel: string, serviceId: number | null) => void;
   onScan: (band: Broadcast) => void;
   onPreview: (target: PreviewTarget | null) => void;
+  /** Fill the parent's height instead of capping the list, as in the fullscreen/PiP overlay. */
+  fill?: boolean;
+  /** Where station previews are mounted; defaults to the page body. */
+  portalTarget?: HTMLElement;
 }
 
 function StationPreview({ canvas, state }: { canvas: HTMLCanvasElement; state: PreviewState }) {
@@ -104,6 +108,8 @@ export function ChannelGuide({
   onSelect,
   onScan,
   onPreview,
+  fill = false,
+  portalTarget,
 }: ChannelGuideProps) {
   // Browsing another band only changes the list; tuning waits for a station click.
   const [viewBand, setViewBand] = useState(band);
@@ -177,7 +183,13 @@ export function ChannelGuide({
   };
 
   return (
-    <Paper bg="dark.9" py="md" aria-label="Program guide">
+    <Paper
+      bg={fill ? 'transparent' : 'dark.9'}
+      py="md"
+      h={fill ? '100%' : undefined}
+      style={fill ? { display: 'flex', flexDirection: 'column' } : undefined}
+      aria-label="Program guide"
+    >
       <Group justify="space-between" px="md" mb="sm">
         <SegmentedControl
           aria-label="Broadcast"
@@ -188,23 +200,26 @@ export function ChannelGuide({
           value={viewBand}
           onChange={(value) => setViewBand(value as Broadcast)}
         />
-        <Button
-          size="xs"
-          color="dark"
-          variant="white"
-          disabled={busy || scanning}
-          onClick={() => onScan(viewBand)}
-        >
-          Scan channels
-        </Button>
+        {/* The scan modal lives on the page, out of sight from fullscreen and PiP. */}
+        {!fill && (
+          <Button
+            size="xs"
+            color="dark"
+            variant="white"
+            disabled={busy || scanning}
+            onClick={() => onScan(viewBand)}
+          >
+            Scan channels
+          </Button>
+        )}
       </Group>
       <Box
         ref={listRef}
         className="program-schedule"
-        mah="70dvh"
+        mah={fill ? undefined : '70dvh'}
         px="md"
         pos="relative"
-        style={{ overflowY: 'auto' }}
+        style={fill ? { flex: 1, minHeight: 0, overflowY: 'auto' } : { overflowY: 'auto' }}
         aria-label="Channel guide"
         onScroll={(event) => setCullY(Math.floor(event.currentTarget.scrollTop / CULL_STEP))}
       >
@@ -221,6 +236,7 @@ export function ChannelGuide({
                   offset={4}
                   shadow="md"
                   transitionProps={{ duration: 0 }}
+                  portalProps={portalTarget ? { target: portalTarget } : undefined}
                 >
                   <Popover.Target>
                     <UnstyledButton
@@ -300,6 +316,7 @@ export function ChannelGuide({
                       height={ROW_HEIGHT}
                       hourWidth={HOUR_WIDTH}
                       descriptionLines={4}
+                      portalTarget={portalTarget}
                     />
                     {events.length === 0 && (
                       <Text

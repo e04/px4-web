@@ -1,5 +1,5 @@
 import { ActionIcon, Group, Slider, Text } from '@mantine/core';
-import { SubtitlesButtonIcon } from '../icons';
+import { GuideButtonIcon, SubtitlesButtonIcon } from '../icons';
 
 interface PipControlsProps {
   captionEnabled: boolean;
@@ -8,6 +8,7 @@ interface PipControlsProps {
   programName: string;
   onToggleCaption: () => void;
   onVolumeChange: (volume: number) => void;
+  onToggleGuide: () => void;
 }
 
 export function PipControls({
@@ -17,6 +18,7 @@ export function PipControls({
   programName,
   onToggleCaption,
   onVolumeChange,
+  onToggleGuide,
 }: PipControlsProps) {
   return (
     <>
@@ -38,6 +40,16 @@ export function PipControls({
           onClick={onToggleCaption}
         >
           <SubtitlesButtonIcon />
+        </ActionIcon>
+        <ActionIcon
+          variant="transparent"
+          color="white"
+          size="lg"
+          aria-label="Channel guide"
+          title="Channel guide"
+          onClick={onToggleGuide}
+        >
+          <GuideButtonIcon />
         </ActionIcon>
         <Slider
           value={Math.round(volume * 100)}

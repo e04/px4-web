@@ -39,6 +39,19 @@ export function MinimizeButtonIcon() {
   return <VideoButtonIcon path={<path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5" />} />;
 }
 
+export function GuideButtonIcon() {
+  return (
+    <VideoButtonIcon
+      path={
+        <>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M3 9h18M9 9v11M13 14.5h4" />
+        </>
+      }
+    />
+  );
+}
+
 export function SubtitlesButtonIcon() {
   return (
     <VideoButtonIcon

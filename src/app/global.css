@@ -196,3 +196,23 @@ body {
   opacity: 0 !important;
   pointer-events: none;
 }
+
+/* Channel guide over the fullscreen video or inside the PiP window. The bottom
+   strip stays clear so the video controls (and the guide button) remain usable. */
+.guide-overlay-backdrop {
+  position: absolute;
+  inset: 0 0 56px;
+  z-index: 10;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.guide-overlay {
+  position: absolute;
+  inset: 24px 24px 0;
+  overflow: hidden;
+  border-radius: var(--mantine-radius-xs);
+  background-color: color-mix(in srgb, var(--mantine-color-dark-9) 88%, transparent);
+  backdrop-filter: blur(16px);
+  color: var(--mantine-color-text);
+}

@@ -8,7 +8,9 @@ import { ScanModal } from './components/ScanModal';
 import { VideoStage } from './components/VideoStage';
 import { PipControls } from './components/PipControls';
 import { ChannelGuide } from './components/ChannelGuide';
+import { GuideOverlay } from './components/GuideOverlay';
 import { LOG_HEIGHT, LogPanel, MetricsGrid, ProgramInfo } from './components/Diagnostics';
+import type { Broadcast } from '../channels';
 import { currentServiceProgram } from '../epg';
 
 export default function App() {
@@ -37,6 +39,7 @@ export default function App() {
     stopPlayer: playback.stopPlayer,
     openPlayback: playback.openPlayback,
     refreshPlayback: playback.refreshPlayback,
+    playbackFailure: playback.failure,
   });
   const selectedProgram = session.service ? session.programs?.[Number(session.service)] : undefined;
   const currentProgram = session.service
@@ -47,6 +50,32 @@ export default function App() {
         session.epgNow,
       )
     : null;
+
+  // In fullscreen and PiP the page is out of sight, so the guide opens over the video.
+  const guideHost = playback.isFullscreen
+    ? playback.videoPaperRef.current
+    : playback.pipControlsHost;
+  const [guideOpen, setGuideOpen] = useState(false);
+  const toggleGuide = useCallback(() => setGuideOpen((open) => !open), []);
+  const closeGuide = useCallback(() => setGuideOpen(false), []);
+  useEffect(() => {
+    if (!guideHost) setGuideOpen(false);
+  }, [guideHost]);
+  const guideProps = {
+    band: session.band,
+    selected: session.selectedValue,
+    service: session.service,
+    channelOptions: session.channelOptions,
+    now: session.epgNow,
+    busy,
+    scanning: session.scanning,
+    onScan: (band: Broadcast) => void session.runScan(band),
+    previewAvailable: session.previewAvailable,
+    previewState: session.previewState,
+    previewCanvas: session.previewCanvas,
+    onPreview: session.setPreviewTarget,
+  };
+
   useEffect(() => {
     const stationName = selectedProgram?.stationName ?? '';
     const programTitle = currentProgram?.title ?? '';
@@ -107,6 +136,7 @@ export default function App() {
                 onToggleFullscreen={() => void playback.toggleFullscreen()}
                 onVolumeChange={playback.setVolume}
                 onExitPip={() => playback.closePip()}
+                onToggleGuide={playback.isFullscreen ? toggleGuide : undefined}
               />
               {playback.pipControlsHost &&
                 createPortal(
@@ -117,6 +147,7 @@ export default function App() {
                     programName={currentProgram?.title ?? ''}
                     onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
                     onVolumeChange={playback.setVolume}
+                    onToggleGuide={toggleGuide}
                   />,
                   playback.pipControlsHost,
                 )}
@@ -126,20 +157,30 @@ export default function App() {
                 current={currentProgram}
                 logo={session.logoFor(session.channel, session.service)}
               />
+              {guideOpen && guideHost && (
+                <GuideOverlay host={guideHost} onClose={closeGuide}>
+                  {(portalTarget) => (
+                    <ChannelGuide
+                      {...guideProps}
+                      fill
+                      portalTarget={portalTarget}
+                      // The PiP window is too small to fit a station preview.
+                      previewAvailable={guideProps.previewAvailable && !playback.pipEnabled}
+                      onSelect={(channel, serviceId) => {
+                        closeGuide();
+                        void session.selectStation(channel, serviceId);
+                      }}
+                    />
+                  )}
+                </GuideOverlay>
+              )}
               <ChannelGuide
-                band={session.band}
-                selected={session.selectedValue}
-                service={session.service}
-                channelOptions={session.channelOptions}
-                now={session.epgNow}
-                busy={busy}
-                scanning={session.scanning}
-                onSelect={(channel, serviceId) => void session.selectStation(channel, serviceId)}
-                onScan={(band) => void session.runScan(band)}
-                previewAvailable={session.previewAvailable}
-                previewState={session.previewState}
-                previewCanvas={session.previewCanvas}
-                onPreview={session.setPreviewTarget}
+                {...guideProps}
+                onSelect={(channel, serviceId) => {
+                  // Bring the video back into view; the guide sits below it.
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  void session.selectStation(channel, serviceId);
+                }}
               />
               <MetricsGrid
                 transport={session.transport}

@@ -29,6 +29,8 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   const playerRef = useRef<FullSegPlayer | undefined>(undefined);
   const recoveryUsedRef = useRef(false);
   const playbackErrorRef = useRef<string | undefined>(undefined);
+  // Set when playback gives up; the session hook reacts by closing the device.
+  const [failure, setFailure] = useState<string>();
   const captionRef = useRef<CaptionOverlay | undefined>(undefined);
   const captionEnabledRef = useRef(captionEnabled);
   const videoWrapRef = useRef<HTMLDivElement>(null);
@@ -62,14 +64,16 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     setPipEnabled(false);
   }, []);
 
+  // A channel switch passes keepPip so the PiP window stays open for the next player.
   const stopPlayer = useCallback(
-    (message?: string) => {
-      closePip();
+    (message?: string, keepPip = false) => {
+      if (!keepPip) closePip();
       captionRef.current?.destroy();
       captionRef.current = undefined;
       playerRef.current?.close();
       playerRef.current = undefined;
       playbackErrorRef.current = undefined;
+      setFailure(undefined);
       const session = sessionRef.current;
       if (session?.b25) {
         session.b25.onOutput = undefined;
@@ -119,7 +123,8 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       }
       session.b25!.onOutput = (bytes) => {
         void player.push(bytes).catch((error) => {
-          if (playerRef.current === player) playbackErrorRef.current ??= String(error);
+          if (playerRef.current === player)
+            playbackErrorRef.current ??= error instanceof Error ? error.message : String(error);
         });
       };
       await session.b25!.request('playback', { enabled: true });
@@ -137,10 +142,9 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       if (!playerRef.current || !session) return;
       const error = session.streamError || session.b25Error || playbackErrorRef.current;
       if (!error) return;
-      stopPlayer();
+      stopPlayer(undefined, true);
       if (session.streamError || recoveryUsedRef.current || !session.b25ServiceId) {
-        addLog(error, true);
-        setStatus(`Playback error: ${error}`);
+        setFailure(error);
         return;
       }
       recoveryUsedRef.current = true;
@@ -149,8 +153,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       void openPlayback(String(session.b25ServiceId), true)
         .catch((failure) => {
           stopPlayer();
-          addLog(String(failure), true);
-          setStatus(`Playback error: ${String(failure)}`);
+          setFailure(failure instanceof Error ? failure.message : String(failure));
         })
         .finally(() => setBusy(false));
     }, 500);
@@ -287,6 +290,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   return {
     playback,
     playing,
+    failure,
     videoVisible,
     captionEnabled,
     setCaptionEnabled,

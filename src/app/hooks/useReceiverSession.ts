@@ -59,9 +59,10 @@ interface UseReceiverSessionOptions {
   setBusy: (busy: boolean) => void;
   setStatus: (status: string) => void;
   addLog: (message: string, error?: boolean) => void;
-  stopPlayer: (message?: string) => void;
+  stopPlayer: (message?: string, keepPip?: boolean) => void;
   openPlayback: (serviceId: string) => Promise<void>;
   refreshPlayback: () => void;
+  playbackFailure: string | undefined;
 }
 
 export function useReceiverSession({
@@ -73,6 +74,7 @@ export function useReceiverSession({
   stopPlayer,
   openPlayback,
   refreshPlayback,
+  playbackFailure,
 }: UseReceiverSessionOptions) {
   const [scan, setScan] = useState<ScanMap>(DEFAULT_SCAN);
   const [channel, setChannel] = useState<string>(DEFAULT_CHANNEL);
@@ -230,6 +232,20 @@ export function useReceiverSession({
     setStatus('Disconnected');
     if (message) addLog(message);
   };
+
+  // A failed player leaves nothing to recover in-page; close the device so
+  // Connect shows again instead of requiring a reload.
+  const failPlayback = async (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    addLog(message, true);
+    await closeSession('Disconnected after playback failure');
+    setStatus(`Playback error: ${message}`);
+  };
+
+  useEffect(() => {
+    if (playbackFailure) void failPlayback(playbackFailure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playbackFailure]);
 
   useEffect(() => {
     let cancelled = false;
@@ -557,12 +573,10 @@ export function useReceiverSession({
     addLog(label, event.state === 'error' || event.state === 'disconnected');
     if (event.state === 'disconnected' && sessionRef.current?.receiver.state === 'disconnected')
       void closeSession().catch((error) => addLog(String(error), true));
-    if (
-      ['stopping', 'stopped', 'error', 'disconnected', 'tuning', 'initializing'].includes(
-        event.state,
-      )
-    )
+    // A retune only passes through `tuning`, which keeps PiP open for the new channel.
+    if (['stopping', 'stopped', 'error', 'disconnected', 'initializing'].includes(event.state))
       stopPlayer();
+    else if (event.state === 'tuning') stopPlayer(undefined, true);
   };
 
   const waitForServices = async (session: ReceiverSession) => {
@@ -619,9 +633,7 @@ export function useReceiverSession({
       try {
         await openPlayback(next);
       } catch (error) {
-        addLog(error instanceof Error ? error.message : String(error), true);
-        stopPlayer();
-        setStatus(`Playback error: ${String(error)}`);
+        await failPlayback(error);
       }
     } catch (error) {
       addLog(error instanceof Error ? error.message : String(error), true);
@@ -656,7 +668,7 @@ export function useReceiverSession({
     if (!session || !connected || busy) return;
     setBusy(true);
     try {
-      stopPlayer();
+      stopPlayer(undefined, true);
       setStatus(`Switching to CH ${value}`);
       addLog(`Switching to CH ${value}`);
       await session.retune(value);
@@ -668,9 +680,7 @@ export function useReceiverSession({
       try {
         await openPlayback(next);
       } catch (error) {
-        addLog(error instanceof Error ? error.message : String(error), true);
-        stopPlayer();
-        setStatus(`Playback error: ${String(error)}`);
+        await failPlayback(error);
         return;
       }
       addLog(`${found.length} service${found.length === 1 ? '' : 's'} found`);
@@ -694,14 +704,12 @@ export function useReceiverSession({
     if (!session || !connected || busy) return;
     setBusy(true);
     try {
-      stopPlayer();
+      stopPlayer(undefined, true);
       setStatus(`Switching to service ${value}`);
       // Same multiplex: the USB stream keeps running, only the B25 filter and player restart.
       await openPlayback(value);
     } catch (error) {
-      addLog(error instanceof Error ? error.message : String(error), true);
-      stopPlayer();
-      setStatus(`Playback error: ${String(error)}`);
+      await failPlayback(error);
     } finally {
       setBusy(false);
     }
