@@ -275,7 +275,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       try {
         context.drawImage(source, 0, 0, nextWidth, nextHeight);
       } catch {
-        // The WebGL canvas can briefly be unavailable. Retry on the next frame.
+        // The canvas can briefly be unavailable (e.g. while moving to PiP). Retry next frame.
       }
     };
     frameId = win.requestAnimationFrame(copyFrame);

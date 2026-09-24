@@ -1,8 +1,14 @@
 import createDecoder, { type DecoderModule } from '../media/generated/decoder.js';
 import { PlaybackDemux } from '../media/demux';
+import { createVideoFrame } from '../media/video-frame';
+
+// Decoded output bounds: frames in flight to the main thread, PCM in flight to the AudioWorklet.
+const MAX_PENDING_FRAMES = 24;
+const MAX_PENDING_SAMPLES = 96000;
 
 let module: DecoderModule;
 let demux: PlaybackDemux;
+let audioPort: MessagePort | undefined;
 let video = 0,
   audio = 0,
   benchmark = false;
@@ -17,11 +23,17 @@ let width = 0,
 let chain = Promise.resolve();
 let failure: string | undefined;
 let selectedService = 0;
-let pendingVideo = 0,
-  pendingVideoBytes = 0,
-  pendingAudio = 0,
+// Every decoder reset starts a new timeline; clocks and PCM from older ones are stale.
+let generation = 0;
+let pendingFrames = 0,
+  pendingSamples = 0,
   outputBlocked = false;
 const send = (data: unknown, transfer: Transferable[] = []) => self.postMessage(data, { transfer });
+function overload() {
+  if (outputBlocked) return;
+  outputBlocked = true;
+  send({ type: 'overload' });
+}
 function reset() {
   previousPts = undefined;
   if (video) module._decoder_close(video);
@@ -29,7 +41,9 @@ function reset() {
   video = module._decoder_open(0);
   audio = module._decoder_open(1);
   if (!video || !audio) throw new Error('Cannot initialize MPEG-2/AAC decoder');
-  send({ type: 'reset' });
+  generation++;
+  audioPort?.postMessage({ type: 'reset', generation });
+  send({ type: 'reset', generation });
 }
 function createDemux(): PlaybackDemux {
   return new PlaybackDemux(
@@ -37,9 +51,7 @@ function createDemux(): PlaybackDemux {
     (pes) => {
       if (pes.kind === 'caption' || pes.kind === 'super') {
         const bytes = pes.bytes.slice().buffer;
-        send({ type: 'caption', kind: pes.kind, bytes, pts: pes.pts, dts: pes.dts }, [
-          bytes as ArrayBuffer,
-        ]);
+        send({ type: 'caption', kind: pes.kind, bytes, pts: pes.pts, dts: pes.dts }, [bytes]);
         return;
       }
       const p = module._media_alloc(pes.bytes.length);
@@ -61,72 +73,56 @@ function createDemux(): PlaybackDemux {
     reset,
   );
 }
+function attachAudio(port: MessagePort) {
+  audioPort = port;
+  port.onmessage = (event) => {
+    pendingSamples = Math.max(0, pendingSamples - (event.data.accepted ?? 0));
+  };
+}
 self.onmessage = (event) => {
   const { id, type, bytes, serviceId } = event.data;
   // Credits bound transferable output even when the main thread is suspended.
   if (type === 'release') {
-    pendingVideo = Math.max(0, pendingVideo - (event.data.video ?? 0));
-    pendingVideoBytes = Math.max(0, pendingVideoBytes - (event.data.videoBytes ?? 0));
-    pendingAudio = Math.max(0, pendingAudio - (event.data.audio ?? 0));
+    pendingFrames = Math.max(0, pendingFrames - 1);
     return;
   }
   if (type === 'playback-pts') {
-    if (video) module._decoder_set_playback_pts(video, event.data.pts);
+    if (video && event.data.generation === generation)
+      module._decoder_set_playback_pts(video, event.data.pts);
     return;
   }
-  const overload = () => {
-    if (!outputBlocked) {
-      outputBlocked = true;
-      send({ type: 'overload' });
-    }
-  };
   chain = chain.then(async () => {
     try {
       if (failure) throw new Error(failure);
       if (type === 'open') {
         selectedService = serviceId;
         benchmark = !!event.data.benchmark;
+        if (event.data.audioPort) attachAudio(event.data.audioPort);
         module = await createDecoder({
-          onVideo(bytes, w, h, pts, fields, aspect) {
-            if (bytes.length !== w * h + 2 * Math.ceil(w / 2) * Math.ceil(h / 2))
-              throw new Error(`FFmpeg YUV frame size mismatch: ${bytes.length} for ${w}x${h}`);
+          onVideo(picture) {
             frames++;
-            width = w;
-            height = h;
-            interlaced ||= !!fields;
+            width = picture.width;
+            height = picture.height;
+            interlaced ||= picture.interlaced;
+            const pts = picture.pts;
             if (previousPts !== undefined && pts > previousPts && pts - previousPts < 90000)
               mediaTicks += pts - previousPts;
             previousPts = pts;
-            if (!benchmark && !outputBlocked) {
-              if (pendingVideo >= 24 || pendingVideoBytes + bytes.byteLength > 96 * 1024 * 1024)
-                return;
-              pendingVideo++;
-              pendingVideoBytes += bytes.byteLength;
-              send(
-                {
-                  type: 'video',
-                  picture: {
-                    bytes,
-                    width: w,
-                    height: h,
-                    pts,
-                    aspect,
-                  },
-                },
-                [bytes.buffer],
-              );
-            }
+            // Late frames are dropped here, before they cost a copy out of the WASM heap.
+            if (benchmark || outputBlocked || pendingFrames >= MAX_PENDING_FRAMES) return;
+            const frame = createVideoFrame(picture);
+            pendingFrames++;
+            send({ type: 'video', frame }, [frame]);
           },
           onAudio(pcm, pts) {
             samples += pcm.length / 2;
-            if (!benchmark && !outputBlocked) {
-              if (pendingAudio + pcm.length / 2 > 96000) {
-                overload();
-                return;
-              }
-              pendingAudio += pcm.length / 2;
-              send({ type: 'audio', samples: pcm, pts }, [pcm.buffer]);
+            if (benchmark || outputBlocked || !audioPort) return;
+            if (pendingSamples + pcm.length / 2 > MAX_PENDING_SAMPLES) {
+              overload();
+              return;
             }
+            pendingSamples += pcm.length / 2;
+            audioPort.postMessage({ type: 'pcm', samples: pcm, pts }, [pcm.buffer]);
           },
         });
         demux = createDemux();
@@ -142,6 +138,8 @@ self.onmessage = (event) => {
           for (const decoder of [video, audio])
             if (module._decoder_flush(decoder) < 0) throw new Error('Decoder flush failed');
           if (!frames || !samples) throw new Error('No decoded MPEG-2 video or AAC audio');
+          // Same port as the PCM, so the worklet sees drain only after the last samples.
+          audioPort?.postMessage({ type: 'drain' });
         }
         decodeMs += performance.now() - start;
       }

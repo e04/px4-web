@@ -53,7 +53,28 @@ it('terminates stalled decoding and rejects pending operations on stop', async (
   await assertion;
   expect(MockWorker.current.terminate).toHaveBeenCalledOnce();
   expect(player.closed).toBe(true);
-  // A late frame from a destroyed generation cannot repopulate the queue.
-  MockWorker.current.reply({ type: 'video', picture: { pts: 0 } });
+  // A late frame from a destroyed generation cannot repopulate the queue, and is released.
+  const frame = { timestamp: 0, close: vi.fn() };
+  MockWorker.current.reply({ type: 'video', frame });
   expect(player.snapshot.videoQueued).toBe(0);
+  expect(frame.close).toHaveBeenCalledOnce();
+});
+
+it('orders frames by timestamp and closes the oldest beyond the queue bound', () => {
+  vi.stubGlobal('Worker', MockWorker);
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const player = new FullSegPlayer({} as HTMLCanvasElement, true);
+  const frames = Array.from({ length: 26 }, (_, i) => ({
+    timestamp: (i ^ 1) * 33367,
+    close: vi.fn(),
+  }));
+  for (const frame of frames) MockWorker.current.reply({ type: 'video', frame });
+  expect(player.snapshot.videoQueued).toBe(24);
+  expect(player.snapshot.dropped).toBe(2);
+  // Timestamps 0 and 1 (arriving swapped, as reordered B-frames can) are the ones evicted.
+  expect(frames[0].close).toHaveBeenCalledOnce();
+  expect(frames[1].close).toHaveBeenCalledOnce();
+  expect(frames.slice(2).every((frame) => !frame.close.mock.calls.length)).toBe(true);
+  player.close();
+  expect(frames.every((frame) => frame.close.mock.calls.length === 1)).toBe(true);
 });

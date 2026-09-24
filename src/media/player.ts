@@ -1,6 +1,8 @@
 import workletUrl from './audio-worklet.ts?worker&url';
-import { YuvRenderer } from './renderer';
-import type { CaptionPacket, PlaybackStats, VideoPicture } from './playback-types';
+import type { CaptionPacket, PlaybackStats } from './playback-types';
+import { microsecondsToPts } from './video-frame';
+
+const MAX_QUEUED_FRAMES = 24;
 
 interface Clock {
   pts?: number;
@@ -20,9 +22,9 @@ export class FullSegPlayer {
   private volumeLevel = 1;
   private analyser?: AnalyserNode;
   private meter = new Float32Array(256);
-  private renderer?: YuvRenderer;
-  private pictures: VideoPicture[] = [];
-  private pictureBytes = 0;
+  private surface?: CanvasRenderingContext2D;
+  /** Decoded frames sorted by presentation time; every frame leaving the queue must be closed. */
+  private frames: VideoFrame[] = [];
   private lastClockSync = 0;
   private clock?: Clock;
   private generation = 0;
@@ -37,7 +39,6 @@ export class FullSegPlayer {
   private recovering = false;
   private resyncs = 0;
   private discardedBytes = 0;
-  private pendingPcm = 0;
   closed = false;
   onCaption?: (packet: CaptionPacket) => void;
   onCaptionReset?: () => void;
@@ -64,12 +65,12 @@ export class FullSegPlayer {
   }
   get bufferedSeconds(): number {
     const clock = this.clock?.pts;
-    const last = this.pictures.at(-1)?.pts;
+    const last = this.frames.at(-1);
     return Math.max(
       this.audioQueuedSeconds,
-      clock !== undefined && last !== undefined
-        ? (last - clock) / 90000
-        : this.pictures.length / 30,
+      clock !== undefined && last
+        ? (microsecondsToPts(last.timestamp) - clock) / 90000
+        : this.frames.length / 30,
     );
   }
   get snapshot() {
@@ -90,9 +91,9 @@ export class FullSegPlayer {
       finished:
         this.ended &&
         (this.benchmark ||
-          (!!this.clock && !this.clock.queued && !this.clock.running && !this.pictures.length)),
+          (!!this.clock && !this.clock.queued && !this.clock.running && !this.frames.length)),
       audioQueuedSeconds: this.audioQueuedSeconds,
-      videoQueued: this.pictures.length,
+      videoQueued: this.frames.length,
       inputQueuedBytes: this.queuedBytes,
       underruns: this.clock?.underruns ?? 0,
       resyncs: this.resyncs,
@@ -106,15 +107,15 @@ export class FullSegPlayer {
     private benchmark = false,
   ) {
     this.worker.onmessage = (event) => {
-      if (this.closed) return;
       const data = event.data;
+      if (this.closed) {
+        data.frame?.close();
+        return;
+      }
       if (data.type === 'reset') {
-        this.pictures = [];
-        this.pictureBytes = 0;
+        this.clearFrames();
         this.clock = undefined;
-        this.worker.postMessage({ type: 'playback-pts', pts: 0 });
-        this.generation++;
-        this.audio?.port.postMessage({ type: 'reset', generation: this.generation });
+        this.generation = data.generation;
         this.onCaptionReset?.();
       } else if (data.type === 'caption') {
         this.onCaption?.({
@@ -124,30 +125,8 @@ export class FullSegPlayer {
           dts: data.dts,
         });
       } else if (data.type === 'video') {
-        this.worker.postMessage({
-          type: 'release',
-          video: 1,
-          videoBytes: data.picture.bytes.byteLength,
-        });
-        this.pictures.push(data.picture);
-        this.pictureBytes += data.picture.bytes.byteLength;
-        this.pictures.sort((a, b) => a.pts - b.pts);
-        // Bound queued frames by count and memory.
-        while (this.pictures.length > 24 || this.pictureBytes > 96 * 1024 * 1024) {
-          this.pictureBytes -= this.pictures.shift()!.bytes.byteLength;
-          this.dropped++;
-        }
-      } else if (data.type === 'audio') {
-        this.worker.postMessage({ type: 'release', audio: data.samples.length / 2 });
-        this.pendingPcm += data.samples.length / 2;
-        if (this.pendingPcm > 96000) {
-          this.fail('AudioWorklet delivery stalled');
-          return;
-        }
-        this.audio?.port.postMessage(
-          { type: 'pcm', samples: data.samples, pts: data.pts, generation: this.generation },
-          [data.samples.buffer],
-        );
+        this.worker.postMessage({ type: 'release' });
+        this.enqueue(data.frame);
       } else if (data.type === 'overload') {
         this.recover();
       } else {
@@ -166,6 +145,28 @@ export class FullSegPlayer {
     };
     this.worker.onerror = (event) => this.fail(event.message || 'Playback Worker failed');
   }
+  private enqueue(frame: VideoFrame): void {
+    let index = this.frames.length;
+    while (index && this.frames[index - 1].timestamp > frame.timestamp) index--;
+    this.frames.splice(index, 0, frame);
+    while (this.frames.length > MAX_QUEUED_FRAMES) {
+      this.frames.shift()!.close();
+      this.dropped++;
+    }
+  }
+  private clearFrames(): void {
+    for (const frame of this.frames) frame.close();
+    this.frames = [];
+  }
+  /** The browser converts YUV→RGB from the frame's colorSpace and scales to its display size. */
+  private present(frame: VideoFrame): void {
+    const canvas = this.canvas;
+    if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+      canvas.width = frame.displayWidth;
+      canvas.height = frame.displayHeight;
+    }
+    this.surface!.drawImage(frame, 0, 0, canvas.width, canvas.height);
+  }
   get volume(): number {
     return this.volumeLevel;
   }
@@ -180,7 +181,10 @@ export class FullSegPlayer {
       throw new Error('Service ID must be an integer from 1 to 65535');
     try {
       if (!this.benchmark) {
-        this.renderer = new YuvRenderer(this.canvas);
+        const surface = this.canvas.getContext('2d', { alpha: false });
+        if (!surface) throw new Error('Canvas 2D is required for video output');
+        surface.imageSmoothingQuality = 'high';
+        this.surface = surface;
         // Called directly from the click handler before awaiting module loading.
         const context = (this.context = new AudioContext({
           sampleRate: 48000,
@@ -197,9 +201,7 @@ export class FullSegPlayer {
         this.audio.onprocessorerror = () => this.fail('AudioWorklet processor failed');
         this.audio.port.onmessage = (event) => {
           if (this.closed) return;
-          if (event.data.accepted !== undefined)
-            this.pendingPcm = Math.max(0, this.pendingPcm - event.data.accepted);
-          else if (event.data.error) {
+          if (event.data.error) {
             if (String(event.data.error).includes('overflow')) this.recover();
             else this.fail(event.data.error);
           } else if (event.data.generation === this.generation) this.clock = event.data;
@@ -216,7 +218,19 @@ export class FullSegPlayer {
           throw new Error('Could not start audio. Play from a user gesture');
         this.animation = requestAnimationFrame(this.tick);
       }
-      if (!this.closed) await this.request('open', { serviceId, benchmark: this.benchmark });
+      if (this.closed) return;
+      // PCM flows Worker → AudioWorklet directly; the main thread only presents video.
+      let audioPort: MessagePort | undefined;
+      if (this.audio) {
+        const channel = new MessageChannel();
+        this.audio.port.postMessage({ type: 'decoder', port: channel.port1 }, [channel.port1]);
+        audioPort = channel.port2;
+      }
+      await this.request(
+        'open',
+        { serviceId, benchmark: this.benchmark, audioPort },
+        audioPort ? [audioPort] : [],
+      );
     } catch (error) {
       this.fail(String(error));
       throw error;
@@ -234,33 +248,34 @@ export class FullSegPlayer {
       const now = performance.now();
       if (now - this.lastClockSync >= 100) {
         this.lastClockSync = now;
-        this.worker.postMessage({ type: 'playback-pts', pts });
+        this.worker.postMessage({ type: 'playback-pts', pts, generation: this.generation });
       }
-      let picture: VideoPicture | undefined;
-      while (this.pictures.length && this.pictures[0].pts <= pts + 1800) {
-        if (picture) this.dropped++;
-        picture = this.pictures.shift();
-        this.pictureBytes -= picture!.bytes.byteLength;
+      let frame: VideoFrame | undefined;
+      while (this.frames.length && microsecondsToPts(this.frames[0].timestamp) <= pts + 1800) {
+        if (frame) {
+          frame.close();
+          this.dropped++;
+        }
+        frame = this.frames.shift();
       }
-      if (picture) {
-        this.avOffsetMs = (picture.pts - pts) / 90;
-        if (this.avOffsetMs < -150) this.dropped++;
-        else {
-          try {
-            this.renderer!.draw(picture);
+      if (frame) {
+        this.avOffsetMs = (microsecondsToPts(frame.timestamp) - pts) / 90;
+        try {
+          if (this.avOffsetMs < -150) this.dropped++;
+          else {
+            this.present(frame);
             this.rendered++;
             this.onFirstFrame?.();
             this.onFirstFrame = undefined;
-          } catch (error) {
-            this.fail(String(error));
-            return;
           }
+        } catch (error) {
+          this.fail(String(error));
+          return;
+        } finally {
+          frame.close();
         }
       }
-      if (this.ended && !clock.queued && !clock.running) {
-        this.pictures = [];
-        this.pictureBytes = 0;
-      }
+      if (this.ended && !clock.queued && !clock.running) this.clearFrames();
     }
     this.animation = requestAnimationFrame(this.tick);
   };
@@ -328,7 +343,6 @@ export class FullSegPlayer {
     await this.request('flush');
     this.fileElapsedMs = performance.now() - this.fileStarted;
     this.ended = true;
-    this.audio?.port.postMessage({ type: 'drain' });
   }
   private fail(message: string): void {
     this.error ??= message;
@@ -339,15 +353,13 @@ export class FullSegPlayer {
     this.closed = true;
     this.worker.terminate();
     cancelAnimationFrame(this.animation);
-    this.pictures = [];
-    this.pictureBytes = 0;
+    this.clearFrames();
     this.audio?.disconnect();
     this.audio?.port.close();
     this.gain?.disconnect();
     this.analyser?.disconnect();
     this.meter.fill(0);
     void this.context?.close().catch(() => {});
-    this.renderer?.close();
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error(this.error ?? 'Playback stopped'));

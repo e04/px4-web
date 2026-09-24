@@ -5,7 +5,6 @@
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/channel_layout.h>
-#include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
 #include <libswresample/swresample.h>
 #include <stdio.h>
@@ -33,8 +32,15 @@ typedef struct {
     AVChannelLayout layout;
 } Decoder;
 
-EM_JS(void, video, (int p, int n, int w, int h, double pts, int interlaced, double aspect), {
-    Module.onVideo(HEAPU8.slice(p, p+n), w, h, pts, interlaced, aspect);
+// Planes stay in the WASM heap; JS must copy them (into a VideoFrame) before returning.
+EM_JS(void, video, (int y, int u, int v, int ys, int us, int vs, int w, int h, int display_width,
+    double pts, int interlaced, int matrix, int primaries, int transfer), {
+    Module.onVideo({
+        heap: HEAPU8,
+        layout: [{offset: y, stride: ys}, {offset: u, stride: us}, {offset: v, stride: vs}],
+        width: w, height: h, displayWidth: display_width, pts, interlaced: !!interlaced,
+        matrix, primaries, transfer,
+    });
 });
 EM_JS(void, audio, (int p, int frames, double pts), {
     Module.onAudio(HEAPF32.slice(p/4, p/4+frames*2), pts);
@@ -68,19 +74,14 @@ static int emit_video(Decoder *d, AVFrame *f) {
     if (f->format != AV_PIX_FMT_YUV420P || f->width > 1920 || f->height > 1088) return AVERROR(EINVAL);
     double pts = f->pts == AV_NOPTS_VALUE ? d->next_pts :
         av_rescale_q(f->pts, av_buffersink_get_time_base(d->filter_sink), (AVRational){1, 90000});
-    // Do not spend CPU scaling a frame that the audio clock has already passed.
+    // Do not spend a copy on a frame that the audio clock has already passed.
     if (d->playback_pts > 0 && pts < d->playback_pts - 4500) return 0;
     AVRational sar = f->sample_aspect_ratio;
-    double aspect = sar.num && sar.den ? (double)f->width * sar.num / (f->height * sar.den) : (double)f->width / f->height;
-    int n = av_image_get_buffer_size(f->format, f->width, f->height, 1);
-    if (n < 0) return n;
-    uint8_t *out = av_malloc(n);
-    if (!out) return AVERROR(ENOMEM);
-    int r = av_image_copy_to_buffer(out, n, (const uint8_t * const*)f->data,
-        f->linesize, f->format, f->width, f->height, 1);
-    if (r >= 0) video((int)out, n, f->width, f->height, pts, d->input_interlaced, aspect);
-    av_free(out);
-    return r < 0 ? r : 0;
+    int display_width = sar.num && sar.den ? (int)av_rescale(f->width, sar.num, sar.den) : f->width;
+    video((int)f->data[0], (int)f->data[1], (int)f->data[2], f->linesize[0], f->linesize[1], f->linesize[2],
+        f->width, f->height, display_width, pts, d->input_interlaced,
+        f->colorspace, f->color_primaries, f->color_trc);
+    return 0;
 }
 
 static int drain_video(Decoder *d) {
@@ -140,8 +141,13 @@ static int receive(Decoder *d) {
         double pts = f->best_effort_timestamp == AV_NOPTS_VALUE ? d->next_pts : (double)f->best_effort_timestamp;
         if (!d->kind) {
             if (f->format != AV_PIX_FMT_YUV420P || f->width > 1920 || f->height > 1088) return AVERROR(EINVAL);
+            int hd = f->height > 576;
             if (f->colorspace == AVCOL_SPC_UNSPECIFIED)
-                f->colorspace = f->height > 576 ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+                f->colorspace = hd ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+            if (f->color_primaries == AVCOL_PRI_UNSPECIFIED)
+                f->color_primaries = hd ? AVCOL_PRI_BT709 : AVCOL_PRI_SMPTE170M;
+            if (f->color_trc == AVCOL_TRC_UNSPECIFIED)
+                f->color_trc = hd ? AVCOL_TRC_BT709 : AVCOL_TRC_SMPTE170M;
             if (f->color_range == AVCOL_RANGE_UNSPECIFIED) f->color_range = AVCOL_RANGE_MPEG;
             d->input_interlaced |= !!(f->flags & AV_FRAME_FLAG_INTERLACED);
             r = configure_video(d, f);

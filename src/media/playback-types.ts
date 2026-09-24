@@ -1,10 +1,3 @@
-export interface VideoPicture {
-  bytes: Uint8Array;
-  width: number;
-  height: number;
-  pts: number;
-  aspect: number;
-}
 export interface CaptionPacket {
   kind: 'caption' | 'super';
   bytes: Uint8Array;

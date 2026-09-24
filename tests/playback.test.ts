@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { PlaybackDemux, readTimestamp, unwrapTimestamp, type Pes } from '../src/media/demux';
 import { PcmQueue } from '../src/media/pcm-queue';
 import createDecoder from '../src/media/generated/decoder.js';
+import { videoFrameInit } from '../src/media/video-frame';
 
 const fixture = () =>
   new Uint8Array(readFileSync(new URL('./fixtures/generated/hd.ts', import.meta.url)));
@@ -151,13 +152,21 @@ describe('AudioWorklet PCM queue', () => {
 });
 
 it('decodes real 1080i MPEG-2 with reordered B frames and audible AAC in streaming WASM', async () => {
-  const pictures: { pts: number; width: number; height: number; interlaced: number }[] = [];
+  const pictures: { pts: number; width: number; height: number; interlaced: boolean }[] = [];
+  let init: VideoFrameBufferInit | undefined;
   let samples = 0,
     energy = 0;
   const audioPts: number[] = [];
   const module = await createDecoder({
-    onVideo(bytes, width, height, pts, interlaced) {
-      expect(bytes.length).toBe(width * height * 1.5);
+    onVideo(picture) {
+      const { heap, layout, width, height, pts, interlaced } = picture;
+      // Each plane must lie inside the heap view handed to the VideoFrame constructor.
+      layout.forEach(({ offset, stride }, plane) => {
+        const rows = plane ? Math.ceil(height / 2) : height;
+        expect(stride).toBeGreaterThanOrEqual(plane ? Math.ceil(width / 2) : width);
+        expect(offset + stride * rows).toBeLessThanOrEqual(heap.length);
+      });
+      init ??= videoFrameInit(picture);
       pictures.push({ pts, width, height, interlaced });
     },
     onAudio(pcm, pts) {
@@ -204,6 +213,13 @@ it('decodes real 1080i MPEG-2 with reordered B frames and audible AAC in streami
     expect(pictures.length).toBeGreaterThanOrEqual(88);
     expect(pictures.every((p) => p.width === 1920 && p.height === 1080 && p.interlaced)).toBe(true);
     expect(pictures.slice(1).every((p, i) => p.pts > pictures[i].pts)).toBe(true);
+    expect(init).toMatchObject({
+      format: 'I420',
+      codedWidth: 1920,
+      displayWidth: 1920,
+      displayHeight: 1080,
+      colorSpace: { matrix: 'bt709', primaries: 'bt709', transfer: 'bt709', fullRange: false },
+    });
     expect(samples).toBeGreaterThan(140000);
     expect(energy).toBeGreaterThan(100);
     expect(

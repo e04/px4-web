@@ -1,4 +1,18 @@
 declare module '*generated/decoder.js' {
+  /** Planar 4:2:0 picture still owned by FFmpeg; valid only during the onVideo call. */
+  export interface DecodedPicture {
+    heap: Uint8Array;
+    layout: [PlaneLayout, PlaneLayout, PlaneLayout];
+    width: number;
+    height: number;
+    displayWidth: number;
+    pts: number;
+    interlaced: boolean;
+    /** FFmpeg AVColorSpace / AVColorPrimaries / AVColorTransferCharacteristic. */
+    matrix: number;
+    primaries: number;
+    transfer: number;
+  }
   export interface DecoderModule {
     HEAPU8: Uint8Array;
     _decoder_open(kind: number): number;
@@ -10,14 +24,7 @@ declare module '*generated/decoder.js' {
     _media_free(p: number): void;
   }
   export default function create(options: {
-    onVideo(
-      bytes: Uint8Array,
-      width: number,
-      height: number,
-      pts: number,
-      interlaced: number,
-      aspect: number,
-    ): void;
+    onVideo(picture: DecodedPicture): void;
     onAudio(samples: Float32Array, pts: number): void;
   }): Promise<DecoderModule>;
 }

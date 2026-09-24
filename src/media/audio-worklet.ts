@@ -7,6 +7,10 @@ declare class AudioWorkletProcessor {
 }
 declare function registerProcessor(name: string, processor: typeof AudioWorkletProcessor): void;
 
+/**
+ * PCM arrives straight from the playback Worker on a transferred MessagePort;
+ * `this.port` only reports the audio clock and errors to the main thread.
+ */
 class BroadcastAudio extends AudioWorkletProcessor {
   private queue = new PcmQueue();
   private ticks = 0;
@@ -15,23 +19,26 @@ class BroadcastAudio extends AudioWorkletProcessor {
   constructor() {
     super();
     this.port.onmessage = (event) => {
-      const data = event.data;
-      try {
-        if (data.type === 'reset') {
-          this.queue.clear();
-          this.drain = false;
-          this.generation = data.generation;
-        } else if (data.type === 'drain') this.drain = true;
-        else if (data.type === 'pcm' && data.generation === this.generation)
-          this.queue.push(data.samples, data.pts);
-      } catch (error) {
-        this.queue.clear();
-        this.port.postMessage({ error: String(error) });
-      } finally {
-        if (data.type === 'pcm') this.port.postMessage({ accepted: data.samples.length / 2 });
-      }
+      if (event.data.type === 'decoder') event.data.port.onmessage = this.receive;
     };
   }
+  private receive = (event: MessageEvent) => {
+    const data = event.data;
+    const port = event.target as MessagePort;
+    try {
+      if (data.type === 'reset') {
+        this.queue.clear();
+        this.drain = false;
+        this.generation = data.generation;
+      } else if (data.type === 'drain') this.drain = true;
+      else if (data.type === 'pcm') this.queue.push(data.samples, data.pts);
+    } catch (error) {
+      this.queue.clear();
+      this.port.postMessage({ error: String(error) });
+    } finally {
+      if (data.type === 'pcm') port.postMessage({ accepted: data.samples.length / 2 });
+    }
+  };
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     const output = outputs[0];
     if (sampleRate !== 48000) return false;
