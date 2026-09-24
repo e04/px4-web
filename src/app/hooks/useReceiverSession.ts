@@ -9,6 +9,7 @@ import {
   listedStations,
   loadScan,
   mainService,
+  remoteOrder,
   representativeName,
   serviceNumber,
   saveScan,
@@ -93,31 +94,35 @@ export function useReceiverSession({
   const channelOptions = useMemo(
     () =>
       (['T', 'BS', 'CS'] as const).flatMap((optionBand) =>
-        visibleChannels(scan, optionBand).flatMap((item) => {
-          const entry = scan[String(item)];
-          const epg = channelEpg[String(item)];
-          const logoRefs = logoLibrary.channels[String(item)];
-          const stations = listedStations(optionBand, entry, epg);
-          // Unscanned channels have no known service; tuning then opens the main one.
-          return (stations.length ? stations : [[]]).map((services, index) => {
-            const main = services[0];
-            const logoRef = main ? logoRefs?.[main.serviceId] : undefined;
-            return {
-              value: `${item}/${main?.serviceId ?? ''}`,
-              channel: String(item),
-              serviceId: main?.serviceId ?? null,
-              services,
-              name: main?.stationName || (index === 0 ? representativeName(entry) : ''),
-              number: (main && serviceNumber(optionBand, main)) ?? `CH ${item}`,
-              schedules: services.map((service) => ({
-                serviceId: service.serviceId,
-                events: epg?.[service.serviceId] ?? [],
-              })),
-              band: optionBand,
-              logo: logoRef ? logoUrls[logoKey(logoRef)] : undefined,
-            };
-          });
-        }),
+        visibleChannels(scan, optionBand)
+          .flatMap((item) => {
+            const entry = scan[String(item)];
+            const epg = channelEpg[String(item)];
+            const logoRefs = logoLibrary.channels[String(item)];
+            const stations = listedStations(optionBand, entry, epg);
+            // Unscanned channels have no known service; tuning then opens the main one.
+            return (stations.length ? stations : [[]]).map((services, index) => {
+              const main = services[0];
+              const logoRef = main ? logoRefs?.[main.serviceId] : undefined;
+              return {
+                value: `${item}/${main?.serviceId ?? ''}`,
+                channel: String(item),
+                serviceId: main?.serviceId ?? null,
+                services,
+                name: main?.stationName || (index === 0 ? representativeName(entry) : ''),
+                number: (main && serviceNumber(optionBand, main)) ?? `CH ${item}`,
+                schedules: services.map((service) => ({
+                  serviceId: service.serviceId,
+                  events: epg?.[service.serviceId] ?? [],
+                })),
+                band: optionBand,
+                logo: logoRef ? logoUrls[logoKey(logoRef)] : undefined,
+                order: main ? remoteOrder(optionBand, main) : [Infinity, Infinity],
+              };
+            });
+          })
+          // Remote-control order; stations without a known remote key sort last.
+          .sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1]),
       ),
     [scan, channelEpg, logoLibrary.channels, logoUrls],
   );

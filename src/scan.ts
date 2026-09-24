@@ -201,6 +201,16 @@ export function serviceNumber(band: Broadcast, service: ScannedService): string 
   return `${String(service.remoteKey).padStart(2, '0')}${(service.serviceId & 7) + 1}`;
 }
 
+/**
+ * Sort key matching a TV's remote-control order: terrestrial remote key then
+ * service_id, satellite service_id. Terrestrial services without a recorded
+ * remote key sort last.
+ */
+export function remoteOrder(band: Broadcast, service: ScannedService): [number, number] {
+  if (band !== 'T') return [service.serviceId, 0];
+  return [service.remoteKey ?? Infinity, service.serviceId];
+}
+
 // Structural subset of ReceiverSession so tests can pass a fake.
 export interface ScanSession {
   receiver: {

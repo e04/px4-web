@@ -148,16 +148,9 @@ export function ChannelGuide({
                     ) : (
                       <span className="station-logo station-logo-placeholder" aria-hidden="true" />
                     )}
-                    <Box miw={0}>
-                      <Text size="sm" fw={700} truncate>
-                        {option.name || option.number}
-                      </Text>
-                      {option.name && (
-                        <Text size="xs" c="dimmed" truncate>
-                          {option.number}
-                        </Text>
-                      )}
-                    </Box>
+                    <Text size="sm" fw={700} miw={0} truncate>
+                      {option.name || option.number}
+                    </Text>
                   </Group>
                 </UnstyledButton>
               );
