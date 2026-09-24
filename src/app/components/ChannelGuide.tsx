@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Modal, SegmentedControl, Stack, Text, UnstyledButton } from '@mantine/core';
+import {
+  Box,
+  Button,
+  Group,
+  Modal,
+  SegmentedControl,
+  Stack,
+  Text,
+  UnstyledButton,
+} from '@mantine/core';
 import type { Broadcast } from '../../channels';
 import { timelineEvents } from '../../epg';
 import type { ChannelOption } from '../hooks/useReceiverSession';
@@ -145,14 +154,27 @@ export function ChannelGuide({
                       aria-current={selected || undefined}
                       onClick={() => select(option.value)}
                     >
-                      <Text size="sm" fw={700} truncate>
-                        {option.name || `CH ${option.value}`}
-                      </Text>
-                      {option.name && (
-                        <Text size="xs" c="dimmed" truncate>
-                          CH {option.value}
-                        </Text>
-                      )}
+                      <Group gap="xs" wrap="nowrap">
+                        {/* Placeholder keeps names aligned with rows that have a logo. */}
+                        {option.logo ? (
+                          <img className="station-logo" src={option.logo} alt="" />
+                        ) : (
+                          <span
+                            className="station-logo station-logo-placeholder"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <Box miw={0}>
+                          <Text size="sm" fw={700} truncate>
+                            {option.name || `CH ${option.value}`}
+                          </Text>
+                          {option.name && (
+                            <Text size="xs" c="dimmed" truncate>
+                              CH {option.value}
+                            </Text>
+                          )}
+                        </Box>
+                      </Group>
                     </UnstyledButton>
                   );
                 })}

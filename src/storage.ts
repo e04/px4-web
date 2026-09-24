@@ -6,6 +6,7 @@ import { createStore, get, set, type UseStore } from 'idb-keyval';
 export const settingsStore: UseStore = createStore('px4-settings', 'settings');
 export const scanStore: UseStore = createStore('px4-scan', 'scan');
 export const epgStore: UseStore = createStore('px4-epg', 'epg');
+export const logoStore: UseStore = createStore('px4-logo', 'logo');
 
 export const CHANNEL_KEY = 'px4-channel';
 export const CAPTION_KEY = 'px4-caption';

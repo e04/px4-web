@@ -1,4 +1,5 @@
 import type { Channel } from './channels';
+import type { LogoData } from './logo';
 import type { ProgramInfo } from './transport/program-info';
 
 // Structural subset of ReceiverSession so tests can pass a fake.
@@ -7,7 +8,7 @@ export interface EpgCrawlSession {
   epgTune(channel: Channel): Promise<boolean>;
   refreshEpgTransport(): Promise<void>;
   stopEpgTuner(): Promise<void>;
-  epgTransport?: { programs?: Record<number, ProgramInfo> };
+  epgTransport?: { programs?: Record<number, ProgramInfo>; logos?: LogoData[] };
 }
 
 export interface EpgCrawlOptions {
@@ -21,13 +22,22 @@ export interface EpgCrawlOptions {
   /** Leave once no new events arrived for this long (after minDwellMs). */
   quietMs?: number;
   maxDwellMs?: number;
+  /**
+   * Keep dwelling past the quiet period (up to maxDwellMs) while this returns
+   * true, e.g. while a service's logo has not arrived in CDT yet.
+   */
+  hold?: (channel: Channel, transport: EpgCrawlSession['epgTransport']) => boolean;
   pollMs?: number;
   /** Pause between complete rounds. */
   roundIntervalMs?: number;
   /** Retry interval while the main tuner is not delivering the USB stream. */
   idleMs?: number;
   onChannel?: (channel: Channel | null) => void;
-  onPrograms: (channel: Channel, programs: Record<number, ProgramInfo>) => Promise<void> | void;
+  onPrograms: (
+    channel: Channel,
+    programs: Record<number, ProgramInfo>,
+    logos: LogoData[],
+  ) => Promise<void> | void;
   onError?: (channel: Channel, error: unknown) => void;
   onRound?: (channels: number) => void;
 }
@@ -97,11 +107,16 @@ export async function crawlEpg(session: EpgCrawlSession, options: EpgCrawlOption
               lastChange = now;
             }
             if (now - start >= maxDwellMs) break;
-            if (now - start >= minDwellMs && now - lastChange >= quietMs) break;
+            if (
+              now - start >= minDwellMs &&
+              now - lastChange >= quietMs &&
+              !options.hold?.(channel, session.epgTransport)
+            )
+              break;
           }
           const programs = session.epgTransport?.programs;
           if (!signal.aborted && programs && count > 0) {
-            await options.onPrograms(channel, programs);
+            await options.onPrograms(channel, programs, session.epgTransport?.logos ?? []);
             visited++;
           }
         } catch (error) {

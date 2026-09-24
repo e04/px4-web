@@ -20,6 +20,8 @@ import { DEFAULT_CHANNEL, loadChannel, stateLabels } from '../format';
 import { currentChannelProgram, loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
 import { crawlEpg } from '../../epg-crawl';
 import type { ProgramInfo } from '../../transport/program-info';
+import { logoDataUrl, logoKey, type LogoData } from '../../logo';
+import { loadLogos, mergeLogos, type LogoLibrary } from '../../logo-store';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 
 export type StreamStats = NonNullable<ReceiverSession['streamStats']>;
@@ -72,6 +74,20 @@ export function useReceiverSession({
   const [scanEvents, setScanEvents] = useState<ScanResult[]>([]);
   const [channelEpg, setChannelEpg] = useState<Record<string, EpgMap>>({});
   const [epgNow, setEpgNow] = useState(Date.now());
+  const [logoLibrary, setLogoLibrary] = useState<LogoLibrary>({ logos: {}, channels: {} });
+  const logoLibraryRef = useRef(logoLibrary);
+  const logoUrls = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(logoLibrary.logos).map(([key, logo]) => [key, logoDataUrl(logo.png)]),
+      ),
+    [logoLibrary.logos],
+  );
+  const logoFor = (channelValue: string, serviceId: number | string | null | undefined) => {
+    const ref =
+      serviceId == null ? undefined : logoLibrary.channels[channelValue]?.[Number(serviceId)];
+    return ref ? logoUrls[logoKey(ref)] : undefined;
+  };
   const channelOptions = useMemo(
     () =>
       (['T', 'BS', 'CS'] as const).flatMap((optionBand) =>
@@ -81,6 +97,10 @@ export function useReceiverSession({
           const serviceIds = entry?.services.map((service) => service.serviceId) ?? [];
           const event = currentChannelProgram(epg, serviceIds, epgNow);
           const station = channelLabel(item, entry);
+          const logoRefs = logoLibrary.channels[String(item)];
+          const logoService = serviceIds.find(
+            (id) => logoRefs?.[id] && logoUrls[logoKey(logoRefs[id])],
+          );
           return {
             value: String(item),
             label: `${station}${event ? ` · ${event.title}` : ''}`,
@@ -90,10 +110,11 @@ export function useReceiverSession({
             // The guide row follows the first service that has any EPG.
             schedule: epg?.[serviceIds.find((id) => epg[id]?.length) ?? -1] ?? [],
             band: optionBand,
+            logo: logoService != null ? logoUrls[logoKey(logoRefs![logoService]!)] : undefined,
           };
         }),
       ),
-    [scan, channelEpg, epgNow],
+    [scan, channelEpg, epgNow, logoLibrary.channels, logoUrls],
   );
   const [transport, setTransport] = useState<TransportSnapshot>();
   const [programs, setPrograms] = useState<TransportSnapshot['programs']>();
@@ -125,6 +146,32 @@ export function useReceiverSession({
     return image;
   };
 
+  // Services name their logo in SDT; the image may arrive later, or on another TS.
+  const recordLogos = (
+    channelValue: string,
+    received: Record<number, ProgramInfo>,
+    logos: LogoData[],
+  ) => {
+    const refs = Object.fromEntries(
+      Object.values(received).flatMap((program) =>
+        program.logo ? [[program.serviceId, program.logo] as const] : [],
+      ),
+    );
+    const next = mergeLogos(logoLibraryRef.current, channelValue, refs, logos);
+    if (next === logoLibraryRef.current) return;
+    logoLibraryRef.current = next;
+    setLogoLibrary(next);
+  };
+  const logoMissing = (
+    transport: { programs?: Record<number, ProgramInfo>; logos?: LogoData[] } | undefined,
+  ) =>
+    Object.values(transport?.programs ?? {}).some(
+      (program) =>
+        program.logo &&
+        !logoLibraryRef.current.logos[logoKey(program.logo)] &&
+        !transport?.logos?.some((logo) => logoKey(logo) === logoKey(program.logo!)),
+    );
+
   const closeSession = async (message?: string) => {
     stopPlayer();
     const session = sessionRef.current;
@@ -152,6 +199,17 @@ export function useReceiverSession({
         .map(async (number) => [String(number), await loadEpg(String(number))] as const),
     ).then((entries) => {
       if (!cancelled) setChannelEpg((current) => ({ ...Object.fromEntries(entries), ...current }));
+    });
+    void loadLogos().then((saved) => {
+      if (cancelled) return;
+      // Anything received before storage answered is newer.
+      const current = logoLibraryRef.current;
+      const next = {
+        logos: { ...saved.logos, ...current.logos },
+        channels: { ...saved.channels, ...current.channels },
+      };
+      logoLibraryRef.current = next;
+      setLogoLibrary(next);
     });
     const timer = window.setInterval(() => setEpgNow(Date.now()), 30000);
     return () => {
@@ -222,6 +280,11 @@ export function useReceiverSession({
               (programKeyRef.current === undefined || performance.now() - lastProgramPoll >= 2000)
             ) {
               lastProgramPoll = performance.now();
+              recordLogos(
+                channelRef.current,
+                current.transport.programs,
+                current.transport.logos ?? [],
+              );
               const key = JSON.stringify(current.transport.programs);
               if (key !== programKeyRef.current) {
                 programKeyRef.current = key;
@@ -291,6 +354,8 @@ export function useReceiverSession({
     const controller = new AbortController();
     const previous = crawlDoneRef.current;
     setEpgCrawl('Idle');
+    // Wait for a missing logo once per channel; CDT repeats far less often than EIT.
+    const logoWaited = new Set<string>();
     const done = previous.then(() =>
       crawlEpg(session, {
         signal: controller.signal,
@@ -299,11 +364,14 @@ export function useReceiverSession({
             .flatMap(channelsFor)
             .filter((item) => scanRef.current[String(item)]?.locked),
         skip: (item) => String(item) === channelRef.current,
+        hold: (item, transport) => !logoWaited.has(String(item)) && logoMissing(transport),
         onChannel: (item) => {
           if (!controller.signal.aborted) setEpgCrawl(item == null ? 'Idle' : `CH ${item}`);
         },
-        onPrograms: async (item, programs) => {
+        onPrograms: async (item, programs, logos) => {
           const key = String(item);
+          logoWaited.add(key);
+          recordLogos(key, programs, logos);
           // The main tuner now owns this channel's EPG.
           if (key === channelRef.current) return;
           const next = mergeEpg(await loadEpg(key), programs);
@@ -636,6 +704,7 @@ export function useReceiverSession({
     channelOptions,
     epgNow,
     epg: channelEpg[channel],
+    logoFor,
     scanning,
     scanCancelling,
     scanProgress,

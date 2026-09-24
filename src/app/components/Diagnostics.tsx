@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
-import { Box, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Box, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import { timelineEvents, type EpgMap } from '../../epg';
 import type { ProgramEvent } from '../../transport/program-info';
@@ -14,6 +14,7 @@ interface ProgramInfoProps {
   epg: EpgMap | undefined;
   current: ProgramEvent | null | undefined;
   now: number;
+  logo?: string;
 }
 
 export const ProgramInfo = memo(function ProgramInfo({
@@ -22,6 +23,7 @@ export const ProgramInfo = memo(function ProgramInfo({
   epg,
   current,
   now,
+  logo,
 }: ProgramInfoProps) {
   const program = service ? programs?.[Number(service)] : undefined;
   const firstHour = timelineStart(now);
@@ -39,9 +41,12 @@ export const ProgramInfo = memo(function ProgramInfo({
     <Stack gap="xs">
       <Paper bg="dark.9" p="md" aria-label="Station and program information">
         <Stack gap="xs">
-          <Text fw={700} style={{ overflowWrap: 'anywhere' }}>
-            {program?.stationName || (service ? service : '-')}
-          </Text>
+          <Group gap="xs" wrap="nowrap">
+            {logo && <img className="station-logo" src={logo} alt="" />}
+            <Text fw={700} style={{ overflowWrap: 'anywhere' }}>
+              {program?.stationName || (service ? service : '-')}
+            </Text>
+          </Group>
           <Text style={{ overflowWrap: 'anywhere' }}>
             {current ? (
               <>

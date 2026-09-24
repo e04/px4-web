@@ -108,3 +108,32 @@ it('keeps crawling after a tuner error', async () => {
   expect(errors).toEqual(['13']);
   expect(tuned).toEqual(['14']);
 });
+
+it('dwells past the quiet period while hold() asks for more, up to maxDwellMs', async () => {
+  vi.useFakeTimers();
+  const { session } = fakeSession(() => true);
+  const controller = new AbortController();
+  const dwell: number[] = [];
+  let start = 0;
+  const done = crawlEpg(session, {
+    signal: controller.signal,
+    channels: () => [13, 14],
+    minDwellMs: 1000,
+    quietMs: 1000,
+    maxDwellMs: 10000,
+    pollMs: 500,
+    hold: (channel) => channel === 13,
+    onChannel: (channel) => {
+      if (channel != null) start = Date.now();
+    },
+    onPrograms: () => {
+      dwell.push(Date.now() - start);
+    },
+    onRound: () => controller.abort(),
+  });
+  await vi.runAllTimersAsync();
+  await done;
+  vi.useRealTimers();
+  expect(dwell[0]).toBeGreaterThanOrEqual(10000);
+  expect(dwell[1]).toBeLessThan(5000);
+});

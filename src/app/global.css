@@ -160,6 +160,20 @@ body {
   border-radius: var(--mantine-radius-xs);
 }
 
+.station-logo {
+  flex: none;
+  /* Every logo_type is shown at 16:9, SD ones having non-square pixels. */
+  width: 32px;
+  height: 18px;
+  object-fit: fill;
+  image-rendering: auto;
+}
+
+.station-logo-placeholder {
+  border-radius: 2px;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
 .channel-guide-station:hover:not(:disabled) {
   background-color: color-mix(in srgb, currentColor 14%, transparent);
 }

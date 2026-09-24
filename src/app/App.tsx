@@ -127,6 +127,7 @@ export default function App() {
                 epg={session.epg}
                 current={currentProgram}
                 now={session.epgNow}
+                logo={session.logoFor(session.channel, session.service)}
               />
               <MetricsGrid
                 stream={session.stream}

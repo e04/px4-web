@@ -3,6 +3,7 @@
 import { readSection } from 'arib-mmt-tlv-ts/ts/si.js';
 import { decodeSIText } from 'arib-mmt-tlv-ts/ts/si-text-decoder.js';
 import type { EventInformation } from 'arib-mmt-tlv-ts/ts/si.js';
+import { betterLogo, completeLogoPng, logoKey, type LogoData, type LogoRef } from '../logo';
 
 export interface ProgramEvent {
   id: number;
@@ -18,12 +19,15 @@ export interface ProgramInfo {
   current: ProgramEvent | null;
   next: ProgramEvent | null;
   future: ProgramEvent[];
+  /** SDT logo_transmission_descriptor; the image itself arrives in CDT. */
+  logo?: LogoRef;
 }
 
 interface ServiceState {
   serviceId: number;
   stationName: string;
   tsName?: string;
+  logo?: LogoRef;
   current: ProgramEvent | null;
   next: ProgramEvent | null;
   future: Map<number, ProgramEvent>;
@@ -34,7 +38,10 @@ interface FragmentState {
   bytes: number[];
 }
 
-const PIDS = new Set([0x10, 0x11, 0x12, 0x26, 0x27]);
+// 0x29 carries CDT (station logos).
+const PIDS = new Set([0x10, 0x11, 0x12, 0x26, 0x27, 0x29]);
+// CDT data_type for logo data.
+const CDT_LOGO = 0x01;
 const JAPANESE = 0x6a706e;
 const DAY_MS = 86400000;
 // ARIB MJD epoch (1858-11-17) to Unix epoch days.
@@ -76,6 +83,7 @@ function eventInfo(event: EventInformation | undefined): ProgramEvent | null {
 export class ProgramInformation {
   private readonly fragments = new Map<number, FragmentState>();
   private readonly services = new Map<number, ServiceState>();
+  private readonly logoData = new Map<string, LogoData>();
 
   resetFragments(): void {
     this.fragments.clear();
@@ -84,6 +92,7 @@ export class ProgramInformation {
   reset(): void {
     this.fragments.clear();
     this.services.clear();
+    this.logoData.clear();
   }
 
   private service(id: number): ServiceState {
@@ -105,7 +114,29 @@ export class ProgramInformation {
           const descriptor = service.descriptors.find((d) => d.tag === 'service');
           if (descriptor?.tag === 'service')
             this.service(service.serviceId).stationName = text(descriptor.serviceName);
+          const logo = service.descriptors.find((d) => d.tag === 'logoTransmission');
+          // Type 3 (simple logo) is a character string, not a CDT image.
+          if (logo?.tag === 'logoTransmission' && logo.logoTransmissionType !== 3)
+            this.service(service.serviceId).logo = {
+              networkId: section.originalNetworkId,
+              logoId: logo.logoId,
+            };
         }
+      } else if (pid === 0x29 && section.tableId === 'CDT') {
+        const module = section.dataModule;
+        // Each section carries one complete logo_type of the logo.
+        if (section.dataType !== CDT_LOGO || module.logoType > 5) return;
+        const png = completeLogoPng(module.data);
+        if (!png) return;
+        const logo: LogoData = {
+          networkId: section.originalNetworkId,
+          logoId: module.logoId,
+          type: module.logoType,
+          version: module.logoVersion,
+          png,
+        };
+        const key = logoKey(logo);
+        if (betterLogo(logo, this.logoData.get(key))) this.logoData.set(key, logo);
       } else if (pid === 0x10 && section.tableId === 'NIT[actual]') {
         // One-seg may omit SDT; the TS name is a useful broadcast-provided fallback.
         for (const stream of section.transportStreams) {
@@ -115,12 +146,19 @@ export class ProgramInformation {
             for (const id of transmission.serviceIdList)
               this.service(id).tsName = text(info.tsName);
         }
-      } else if ((pid === 0x12 || pid === 0x26 || pid === 0x27) &&
-        (section.tableId === 'EIT[p/f]' || section.tableId === 'EIT[schedule basic]' || section.tableId === 'EIT[schedule extended]') && !section.other) {
+      } else if (
+        (pid === 0x12 || pid === 0x26 || pid === 0x27) &&
+        (section.tableId === 'EIT[p/f]' ||
+          section.tableId === 'EIT[schedule basic]' ||
+          section.tableId === 'EIT[schedule extended]') &&
+        !section.other
+      ) {
         const service = this.service(section.serviceId);
         if (section.tableId === 'EIT[p/f]') {
           if (section.sectionNumber <= 1)
-            service[section.sectionNumber === 0 ? 'current' : 'next'] = eventInfo(section.events[0]);
+            service[section.sectionNumber === 0 ? 'current' : 'next'] = eventInfo(
+              section.events[0],
+            );
         } else {
           for (const raw of section.events) {
             const event = eventInfo(raw);
@@ -207,8 +245,13 @@ export class ProgramInformation {
         current: service.current,
         next: service.next,
         future: [...service.future.values()].sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
+        ...(service.logo ? { logo: service.logo } : {}),
       };
     }
     return result;
+  }
+
+  logos(): LogoData[] {
+    return [...this.logoData.values()];
   }
 }

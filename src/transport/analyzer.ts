@@ -115,6 +115,7 @@ export class TsAnalyzer {
       pids: [...this.pids.values()].map((s) => ({ ...s })),
       services: this.psi.services,
       programs: this.programs.snapshot(),
+      logos: this.programs.logos(),
       transportStreamId: this.psi.transportStreamId,
       patVersion: this.psi.patVersion,
       crcErrors: this.psi.crcErrors,
