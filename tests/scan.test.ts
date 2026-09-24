@@ -195,6 +195,7 @@ describe('scanChannels', () => {
       calls++;
       session.transport!.programs![1] = {
         stationName: calls >= 2 ? 'Station A' : '',
+        remoteKey: 1,
         current: event,
         next: { ...event, id: 2 },
       };
@@ -205,7 +206,9 @@ describe('scanChannels', () => {
       pollMs: 0,
     });
     expect(calls).toBe(2);
-    expect(result['13']?.services).toEqual([{ serviceId: 1, stationName: 'Station A' }]);
+    expect(result['13']?.services).toEqual([
+      { serviceId: 1, stationName: 'Station A', remoteKey: 1 },
+    ]);
   });
 
   it('stops on hardware errors instead of marking remaining channels unreceivable', async () => {
@@ -236,6 +239,28 @@ describe('scanChannels', () => {
     expect(onProgress).not.toHaveBeenCalled();
   });
 
+  it('waits for the terrestrial remote key, which NIT carries less often than SDT/EIT', async () => {
+    const session = fakeSession({
+      13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] },
+    });
+    const refresh = session.refreshTransport.bind(session);
+    const event = { id: 1, title: 'Now', description: '', genres: [], start: 100, end: 200 };
+    let calls = 0;
+    session.refreshTransport = async () => {
+      await refresh();
+      calls++;
+      session.transport!.programs![1] = {
+        stationName: 'A',
+        ...(calls >= 3 ? { remoteKey: 4 } : {}),
+        current: event,
+        next: { ...event, id: 2 },
+      };
+    };
+    const result = await scanChannels(session, { channels: [13], siSettleMs: 5000, pollMs: 0 });
+    expect(calls).toBe(3);
+    expect(result['13']?.services).toEqual([{ serviceId: 1, stationName: 'A', remoteKey: 4 }]);
+  });
+
   it('moves on once every discovered service has present and following EIT', async () => {
     const session = fakeSession({
       13: { locked: true, services: [{ serviceId: 1, stationName: 'A' }] },
@@ -249,6 +274,7 @@ describe('scanChannels', () => {
       if (calls >= 2)
         session.transport!.programs![1] = {
           stationName: 'A',
+          remoteKey: 1,
           current: event,
           next: { ...event, id: 2 },
         };

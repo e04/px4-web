@@ -1,7 +1,13 @@
 import { loadValue, saveValue, scanStore } from './storage';
 import type { ProgramEvent } from './transport/program-info';
 import type { EpgMap } from './epg';
-import { channelsFor, TERRESTRIAL_CHANNELS, type Broadcast, type Channel } from './channels';
+import {
+  channelsFor,
+  parseChannel,
+  TERRESTRIAL_CHANNELS,
+  type Broadcast,
+  type Channel,
+} from './channels';
 import { SATELLITE_DEFAULTS } from './satellite-defaults';
 
 export interface ScannedService {
@@ -310,6 +316,8 @@ export async function scanChannels(
     }
 
     let services: ScannedService[] = [];
+    // Terrestrial NIT (remote key) repeats far less often than SDT/EIT p/f.
+    const needsRemoteKey = parseChannel(channel).band === 'T';
     const deadline = Date.now() + siSettleMs;
     for (;;) {
       aborted(options);
@@ -334,7 +342,12 @@ export async function scanChannels(
         current.length > 0 &&
         current.every((service) => {
           const program = transport?.programs?.[service.serviceId];
-          return service.stationName && program?.current && program?.next;
+          return (
+            service.stationName &&
+            program?.current &&
+            program?.next &&
+            (!needsRemoteKey || service.remoteKey != null)
+          );
         })
       )
         break;
