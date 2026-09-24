@@ -15,7 +15,14 @@ function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): Prog
     const known = byId.get(event.id);
     byId.set(
       event.id,
-      !event.title && known?.title ? { ...event, title: known.title, description: known.description, genres: event.genres.length ? event.genres : known.genres } : event,
+      !event.title && known?.title
+        ? {
+            ...event,
+            title: known.title,
+            description: known.description,
+            genres: event.genres.length ? event.genres : known.genres,
+          }
+        : event,
     );
   }
   return [...byId.values()];
@@ -23,13 +30,22 @@ function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): Prog
 
 const overlaps = (a: ProgramEvent, b: ProgramEvent) => a.start! < b.end! && b.start! < a.end!;
 
-export function timelineEvents(events: (ProgramEvent | null)[], now: number, start = now, hourWidth = 100) {
+export function timelineEvents(
+  events: (ProgramEvent | null)[],
+  now: number,
+  start = now,
+  hourWidth = 100,
+) {
   const msPerPx = 3600000 / hourWidth;
   const end = start + 24 * 3600000;
   return collapseEvents(
     events.filter(
       (event) =>
-        event?.start != null && event.end != null && event.end > now && event.start < end && event.end > event.start,
+        event?.start != null &&
+        event.end != null &&
+        event.end > now &&
+        event.start < end &&
+        event.end > event.start,
     ),
   )
     .sort((a, b) => a.start! - b.start!)
@@ -99,15 +115,33 @@ export function stationTimeline(
     .sort((a, b) => a.lane - b.lane || a.left - b.left);
 }
 
-export function currentChannelProgram(epg: EpgMap | undefined, serviceIds: number[], now: number): ProgramEvent | undefined {
+export function currentChannelProgram(
+  epg: EpgMap | undefined,
+  serviceIds: number[],
+  now: number,
+): ProgramEvent | undefined {
   for (const id of serviceIds) {
-    const match = epg?.[id]?.find((event) => event.start != null && event.start <= now && event.end != null && now < event.end && event.title);
+    const match = epg?.[id]?.find(
+      (event) =>
+        event.start != null &&
+        event.start <= now &&
+        event.end != null &&
+        now < event.end &&
+        event.title,
+    );
     if (match) return match;
   }
   return undefined;
 }
-export function currentServiceProgram(live: ProgramEvent | null | undefined, epg: EpgMap | undefined, serviceId: number, now: number) {
-  return live?.title && (live.start == null || live.start <= now) && (live.end == null || live.end > now)
+export function currentServiceProgram(
+  live: ProgramEvent | null | undefined,
+  epg: EpgMap | undefined,
+  serviceId: number,
+  now: number,
+) {
+  return live?.title &&
+    (live.start == null || live.start <= now) &&
+    (live.end == null || live.end > now)
     ? live
     : currentChannelProgram(epg, [serviceId], now);
 }
@@ -116,20 +150,35 @@ const key = (channel: string) => `channel:${channel}`;
 function validEvent(value: unknown): value is ProgramEvent {
   if (!value || typeof value !== 'object') return false;
   const event = value as Partial<ProgramEvent>;
-  return typeof event.id === 'number' && typeof event.title === 'string' &&
-    typeof event.description === 'string' && typeof event.start === 'number' &&
-    typeof event.end === 'number' && Number.isFinite(event.start) && Number.isFinite(event.end);
+  return (
+    typeof event.id === 'number' &&
+    typeof event.title === 'string' &&
+    typeof event.description === 'string' &&
+    typeof event.start === 'number' &&
+    typeof event.end === 'number' &&
+    Number.isFinite(event.start) &&
+    Number.isFinite(event.end)
+  );
 }
 
-export function mergeEpg(existing: EpgMap, programs: Record<number, ProgramInfo>, now = Date.now()): EpgMap {
+export function mergeEpg(
+  existing: EpgMap,
+  programs: Record<number, ProgramInfo>,
+  now = Date.now(),
+): EpgMap {
   const result: EpgMap = {};
   for (const [id, program] of Object.entries(programs)) {
-    const valid = (event: ProgramEvent | null): event is ProgramEvent => validEvent(event) && event.end! > now;
-    const received = collapseEvents([...program.future, program.current, program.next].filter(valid));
+    const valid = (event: ProgramEvent | null): event is ProgramEvent =>
+      validEvent(event) && event.end! > now;
+    const received = collapseEvents(
+      [...program.future, program.current, program.next].filter(valid),
+    );
     const receivedIds = new Set(received.map((event) => event.id));
     // Stored events superseded by a reschedule: a different event now occupies their slot.
     const stored = (existing[Number(id)] ?? []).filter(
-      (event) => valid(event) && (receivedIds.has(event.id) || !received.some((next) => overlaps(event, next))),
+      (event) =>
+        valid(event) &&
+        (receivedIds.has(event.id) || !received.some((next) => overlaps(event, next))),
     );
     const events = collapseEvents([...stored, ...received]);
     if (events.length) result[Number(id)] = events.sort((a, b) => a.start! - b.start!);
