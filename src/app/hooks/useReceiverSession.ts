@@ -61,6 +61,7 @@ interface UseReceiverSessionOptions {
   addLog: (message: string, error?: boolean) => void;
   stopPlayer: (message?: string, keepPip?: boolean) => void;
   openPlayback: (serviceId: string) => Promise<void>;
+  adoptPlayer: (player: FullSegPlayer, serviceId: string) => Promise<void>;
   refreshPlayback: () => void;
   playbackFailure: string | undefined;
 }
@@ -73,6 +74,7 @@ export function useReceiverSession({
   addLog,
   stopPlayer,
   openPlayback,
+  adoptPlayer,
   refreshPlayback,
   playbackFailure,
 }: UseReceiverSessionOptions) {
@@ -178,6 +180,10 @@ export function useReceiverSession({
   const [crawlHeld, setCrawlHeld] = useState(false);
   // One detached canvas the preview popup adopts; the player keeps drawing into it.
   const previewCanvas = useMemo(() => document.createElement('canvas'), []);
+  // The tuned preview's player; selecting its station hands it to main playback.
+  const previewPlayerRef = useRef<
+    { channel: string; serviceId: number; player: FullSegPlayer; adopted?: boolean } | undefined
+  >(undefined);
   const firmwareRef = useRef<FirmwareImage | undefined>(undefined);
 
   // The binary is bundled at build time: fetch once, reuse for the session.
@@ -502,6 +508,7 @@ export function useReceiverSession({
     };
     const lossBefore = mainLoss();
     let playing = false;
+    let handle: NonNullable<typeof previewPlayerRef.current> | undefined;
     setPreviewState('tuning');
     // Drop the previous station's last frame.
     previewCanvas.width = 0;
@@ -529,6 +536,8 @@ export function useReceiverSession({
       if (stopped) return;
       stage = 'waiting for first frame';
       log('tuned');
+      handle = { channel: previewChannel, serviceId, player: current };
+      previewPlayerRef.current = handle;
     });
     const failed = done.catch((error) =>
       fail(error instanceof Error ? error.message : String(error)),
@@ -559,9 +568,14 @@ export function useReceiverSession({
       stopped = true;
       release();
       window.clearInterval(poll);
-      player?.close();
+      if (previewPlayerRef.current === handle) previewPlayerRef.current = undefined;
+      // An adopted player now belongs to main playback.
+      const closePlayer = () => {
+        if (!handle?.adopted) player?.close();
+      };
+      closePlayer();
       // Also covers a player created after this cleanup, while the chain was pending.
-      void done.finally(() => player?.close()).catch(() => {});
+      void done.finally(closePlayer).catch(() => {});
     };
     // Session identity changes always toggle `connected`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -670,6 +684,27 @@ export function useReceiverSession({
     try {
       stopPlayer(undefined, true);
       setStatus(`Switching to CH ${value}`);
+      // The previewed station keeps playing: its tuner, B25 filter and decoder become main's.
+      const preview = previewPlayerRef.current;
+      if (
+        preview &&
+        !preview.player.closed &&
+        preview.channel === value &&
+        String(preview.serviceId) === preferred &&
+        session.adoptPreview(value, preview.serviceId)
+      ) {
+        preview.adopted = true;
+        previewPlayerRef.current = undefined;
+        streamChannelRef.current = value;
+        setService(preferred);
+        addLog(`Switching to CH ${value} (preview handoff)`);
+        try {
+          await adoptPlayer(preview.player, preferred);
+        } catch (error) {
+          await failPlayback(error);
+        }
+        return;
+      }
       addLog(`Switching to CH ${value}`);
       await session.retune(value);
       streamChannelRef.current = value;

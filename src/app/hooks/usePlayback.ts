@@ -87,6 +87,41 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     [addLog, closePip, sessionRef],
   );
 
+  // Wire a player (new, or a preview already decoding) to the session's B25 output.
+  const attachPlayer = useCallback(
+    async (player: FullSegPlayer, serviceId: string) => {
+      const session = sessionRef.current;
+      if (!session?.b25 || !canvasRef.current) throw new Error('Playback is unavailable');
+      player.setCanvas(canvasRef.current);
+      player.setVolume(volumeRef.current);
+      playerRef.current = player;
+      player.onCaption = (packet) => {
+        captionRef.current?.push(packet.kind, packet.bytes, packet.pts / 90000, packet.dts / 90000);
+      };
+      player.onCaptionReset = () => captionRef.current?.reset();
+      if (videoWrapRef.current) {
+        captionRef.current?.destroy();
+        const overlay = new CaptionOverlay(
+          videoWrapRef.current,
+          () => playerRef.current?.clockSeconds,
+        );
+        overlay.setEnabled(captionEnabledRef.current);
+        captionRef.current = overlay;
+      }
+      session.b25.onOutput = (bytes) => {
+        void player.push(bytes).catch((error) => {
+          if (playerRef.current === player)
+            playbackErrorRef.current ??= error instanceof Error ? error.message : String(error);
+        });
+      };
+      await session.b25.request('playback', { enabled: true });
+      setPlaying(true);
+      setStatus('Playing');
+      addLog(`Playback started for service ${serviceId}`);
+    },
+    [addLog, sessionRef, setStatus],
+  );
+
   const openPlayback = useCallback(
     async (serviceId: string, recovering = false) => {
       const session = sessionRef.current;
@@ -102,37 +137,28 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
         await session.startB25(Number(serviceId), true);
       }
       const player = new FullSegPlayer(canvasRef.current);
-      player.setVolume(volumeRef.current);
       playerRef.current = player;
       player.onFirstFrame = () => {
         if (playerRef.current === player) setVideoVisible(true);
       };
       await player.open(Number(serviceId));
-      player.onCaption = (packet) => {
-        captionRef.current?.push(packet.kind, packet.bytes, packet.pts / 90000, packet.dts / 90000);
-      };
-      player.onCaptionReset = () => captionRef.current?.reset();
-      if (videoWrapRef.current) {
-        captionRef.current?.destroy();
-        const overlay = new CaptionOverlay(
-          videoWrapRef.current,
-          () => playerRef.current?.clockSeconds,
-        );
-        overlay.setEnabled(captionEnabledRef.current);
-        captionRef.current = overlay;
-      }
-      session.b25!.onOutput = (bytes) => {
-        void player.push(bytes).catch((error) => {
-          if (playerRef.current === player)
-            playbackErrorRef.current ??= error instanceof Error ? error.message : String(error);
-        });
-      };
-      await session.b25!.request('playback', { enabled: true });
-      setPlaying(true);
-      setStatus('Playing');
-      addLog(`Playback started for service ${serviceId}`);
+      await attachPlayer(player, serviceId);
     },
-    [addLog, sessionRef, setStatus, stopPlayer],
+    [addLog, sessionRef, setStatus, attachPlayer],
+  );
+
+  /** Promote a preview player whose B25 filter the session has adopted; it keeps its decoder state. */
+  const adoptPlayer = useCallback(
+    async (player: FullSegPlayer, serviceId: string) => {
+      recoveryUsedRef.current = false;
+      if (player.rendered) setVideoVisible(true);
+      else
+        player.onFirstFrame = () => {
+          if (playerRef.current === player) setVideoVisible(true);
+        };
+      await attachPlayer(player, serviceId);
+    },
+    [attachPlayer],
   );
 
   useEffect(() => {
@@ -309,6 +335,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     closePip,
     stopPlayer,
     openPlayback,
+    adoptPlayer,
     togglePip,
     toggleFullscreen,
     refreshPlayback,

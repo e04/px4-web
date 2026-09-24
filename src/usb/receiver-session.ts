@@ -32,6 +32,9 @@ export class ReceiverSession {
   // Descrambler for a station previewed on the auxiliary tuner; shares the card.
   private previewB25?: B25Worker;
   private previewDropped = 0;
+  // Channel the free tuner is locked to for the current preview.
+  private previewChannel?: Channel;
+  private previewServiceId?: number;
   // Two B25 filters (playback and preview) share one card, which takes one APDU at a
   // time. Playback goes first: its B25 stalls the USB stream while it waits for a key.
   private cardBusy = false;
@@ -117,11 +120,11 @@ export class ReceiverSession {
     if (this.closing || this.stream || this.receiver.state !== 'locked')
       throw new Error('Start TS capture after demod lock');
     const epoch = ++this.epoch;
-    const { stream, worker } = this.wireStream(epoch);
+    const { stream } = this.wireStream(epoch);
     try {
       await this.receiver.startCapture();
       if (this.closing || epoch !== this.epoch) return;
-      this.serveStream(epoch, stream, worker);
+      this.serveStream(epoch, stream);
     } catch (error) {
       this.streamError = String(error);
       await this.close().catch(() => {});
@@ -162,14 +165,18 @@ export class ReceiverSession {
     await this.receiver.startCapture();
     if (this.closing || epoch !== this.epoch)
       throw new Error('Channel switch was superseded by a newer operation');
-    const { stream, worker } = this.wireStream(epoch);
-    this.serveStream(epoch, stream, worker);
+    const { stream } = this.wireStream(epoch);
+    this.serveStream(epoch, stream);
     return result;
   }
 
   private wireStream(epoch: number): { stream: UsbTsStream; worker: TransportWorker } {
     const stream = (this.stream = new UsbTsStream(this.device));
-    const worker = (this.worker = new TransportWorker(
+    return { stream, worker: this.wireWorker(epoch) };
+  }
+
+  private wireWorker(epoch: number): TransportWorker {
+    return (this.worker = new TransportWorker(
       (bytes) => {
         const b25 = this.closing || epoch !== this.epoch ? undefined : this.b25;
         if (b25 && !this.fileDecoding && !this.b25Error)
@@ -180,14 +187,14 @@ export class ReceiverSession {
       this.receiver.receiverIndex,
       this.receiver.bridge.family.startsWith('isdb2056'),
     ));
-    return { stream, worker };
   }
 
-  private serveStream(epoch: number, stream: UsbTsStream, worker: TransportWorker): void {
+  // Chunks go to whichever demux is current: adopting a preview swaps it mid-stream.
+  private serveStream(epoch: number, stream: UsbTsStream): void {
     void stream
       .run((bytes) => {
-        if (this.closing || epoch !== this.epoch || this.worker !== worker)
-          return Promise.resolve();
+        const worker = this.worker;
+        if (this.closing || epoch !== this.epoch || !worker) return Promise.resolve();
         // Best effort: an overloaded EPG demux drops chunks instead of stalling playback.
         this.epgWorker?.request('chunk', bytes.slice(0)).catch(() => {});
         return worker.request('chunk', bytes);
@@ -198,10 +205,8 @@ export class ReceiverSession {
         // WebUSB has no abortable transferIn; drain() requires the physical
         // request to settle before another tune, or closes the session.
         stream.stop();
-        if (this.worker === worker) {
-          worker.close();
-          this.worker = undefined;
-        }
+        this.worker?.close();
+        this.worker = undefined;
       });
   }
 
@@ -239,7 +244,7 @@ export class ReceiverSession {
     this.releaseAuxiliary();
     if (this.closing) throw new Error('Session closed');
     if (!(await this.receiver.auxiliaryTune(channel)) || this.closing) return false;
-    this.epgWorker = new TransportWorker(undefined, Receiver.auxiliaryIndex(channel));
+    this.epgWorker = new TransportWorker(undefined, this.receiver.auxiliaryIndexFor(channel));
     return true;
   }
 
@@ -262,8 +267,9 @@ export class ReceiverSession {
     if (this.closing) throw new Error('Session closed');
     if (!card?.atr) throw new Error('Start playback first so the card is ready');
     if (!(await this.receiver.auxiliaryTune(channel)) || this.closing) return false;
-    const b25 = (this.previewB25 = new B25Worker((bytes) =>
-      this.withCard(() => card.transmit(bytes), false),
+    // Card priority follows the role: an adopted preview filter becomes playback's.
+    const b25: B25Worker = (this.previewB25 = new B25Worker((bytes) =>
+      this.withCard(() => card.transmit(bytes), this.b25 === b25),
     ));
     await b25.request('open', { serviceId, emm: false });
     if (this.previewB25 !== b25) throw new Error('Preview superseded');
@@ -281,9 +287,47 @@ export class ReceiverSession {
     // descrambler drops chunks there instead of overflowing B25.
     const worker = (this.epgWorker = new TransportWorker(
       (bytes) => b25.push(bytes).catch(() => {}),
-      Receiver.auxiliaryIndex(channel),
+      this.receiver.auxiliaryIndexFor(channel),
     ));
     await worker.request('forward');
+    this.previewChannel = channel;
+    this.previewServiceId = serviceId;
+    return true;
+  }
+
+  /**
+   * Play the previewed service as main playback, skipping the retune and the
+   * descrambler's key wait: the free tuner becomes the main one and its B25
+   * filter, already clear, becomes `b25`. The caller moves the preview player
+   * onto `b25.onOutput`. False when the preview cannot be adopted.
+   */
+  adoptPreview(channel: Channel, serviceId: number): boolean {
+    const b25 = this.previewB25;
+    if (
+      this.closing ||
+      this.b25Starting ||
+      this.previewChannel !== channel ||
+      this.previewServiceId !== serviceId ||
+      !b25 ||
+      b25.error ||
+      !this.receiving ||
+      !this.receiver.adoptAuxiliary(channel)
+    )
+      return false;
+    // Detach the filter before releasing the rest of the preview chain.
+    this.previewB25 = undefined;
+    b25.onOutput = undefined;
+    this.releaseAuxiliary();
+    this.b25?.close();
+    this.b25 = b25;
+    this.b25ServiceId = serviceId;
+    this.b25Error = undefined;
+    this.worker?.close();
+    this.transport = undefined;
+    this.streamError = undefined;
+    void this.wireWorker(this.epoch)
+      .request('forward')
+      .catch(() => {});
     return true;
   }
 
@@ -320,6 +364,8 @@ export class ReceiverSession {
     this.epgTransport = undefined;
     this.previewB25?.close();
     this.previewB25 = undefined;
+    this.previewChannel = undefined;
+    this.previewServiceId = undefined;
   }
 
   private withCard<T>(operation: () => Promise<T>, main = true): Promise<T> {

@@ -32,6 +32,21 @@ export interface ReceiverEvent {
   message: string;
 }
 
+// Exports of the main tuner pair and their counterparts on the second pair (PX4/PX5).
+const SWAPPED: Record<string, string> = {
+  receiver_frequency: 'aux_frequency',
+  receiver_pll: 'aux_pll',
+  receiver_acquire: 'aux_acquire',
+  receiver_lock: 'aux_lock',
+  receiver_tsid: 'aux_tsid',
+  receiver_select_tsid: 'aux_select_tsid',
+  receiver_current_tsid: 'aux_current_tsid',
+  receiver_capture: 'aux_capture',
+  // The main pair only pauses: its terrestrial tuner loops RF through to the second one.
+  receiver_pause: 'aux_stop',
+};
+for (const [main, aux] of Object.entries(SWAPPED)) SWAPPED[aux] = main;
+
 export class Receiver {
   state: ReceiverState = 'connected';
   generation = 0;
@@ -43,6 +58,8 @@ export class Receiver {
   private stopPending?: Promise<void>;
   private bridgeInitialized = false;
   private callQueue: Promise<unknown> = Promise.resolve();
+  // After a preview is adopted the second tuner pair plays and the first one is free.
+  private swapped = false;
   constructor(
     readonly bridge: It930xBridge,
     private readonly maxPacketSize: number,
@@ -59,7 +76,10 @@ export class Receiver {
   }
   // ASYNCIFY allows one in-flight export per module; the main and auxiliary
   // receivers share it, so every call is queued.
-  private call(name: string, ...args: number[]): Promise<number> {
+  private call(requested: string, ...args: number[]): Promise<number> {
+    const name = this.swapped ? (SWAPPED[requested] ?? requested) : requested;
+    // Emscripten asserts arity; only the main-pair export takes the satellite slot.
+    if (name === 'aux_frequency') args = args.slice(0, 1);
     const operation = this.callQueue.then(async () => {
       this.check();
       if (!this.tuner) throw new Error('Tuner is not initialized');
@@ -109,6 +129,7 @@ export class Receiver {
       return Promise.reject(new Error('Stop before initializing'));
     return this.run(async () => {
       this.update('initializing', 'Querying firmware / shared init');
+      this.swapped = false;
       // New module on every power cycle discards tuner register/calibration caches.
       this.tuner = await createTuner({
         i2cRead: async (address, length) => {
@@ -154,7 +175,7 @@ export class Receiver {
       this.update('tuning', `CH ${channel} / ${frequencyKHz} kHz`);
       const start = performance.now();
       const family = this.bridge.family;
-      this.receiverIndex = family === 'px4' && band === 'T' ? 2 : 0;
+      this.receiverIndex = family === 'px4' ? this.auxiliaryIndexFor(channel) ^ 1 : 0;
       const result: TuneResult = {
         generation: this.generation,
         timestamp: new Date().toISOString(),
@@ -257,6 +278,24 @@ export class Receiver {
     return parseChannel(channel).band === 'T' ? 3 : 1;
   }
 
+  /** TS tag the free tuner uses for a channel, following any role swap. */
+  auxiliaryIndexFor(channel: Channel): number {
+    return Receiver.auxiliaryIndex(channel) ^ (this.swapped ? 1 : 0);
+  }
+
+  /**
+   * Make the free tuner, already capturing `channel`, the main one without
+   * retuning; the previous main tuner becomes the free one. False when busy.
+   */
+  adoptAuxiliary(channel: Channel): boolean {
+    if (!this.hasAuxiliary || this.pending || this.stopPending || this.state !== 'streaming')
+      return false;
+    this.receiverIndex = this.auxiliaryIndexFor(channel);
+    this.swapped = !this.swapped;
+    this.update('streaming', `Receiving index ${this.receiverIndex} TS`);
+    return true;
+  }
+
   /**
    * Tune the auxiliary tuner and enable its TS output. Failures never touch the
    * main receiver state; a lock failure resolves false.
@@ -267,7 +306,8 @@ export class Receiver {
     // A main-tuner operation in flight is fine: module calls are queued.
     if (!['ready', 'tuning', 'locked', 'streaming'].includes(this.state))
       throw new Error('Initialize first');
-    await this.call('aux_frequency', frequencyKHz);
+    // The slot is dropped unless the roles are swapped (main-pair export).
+    await this.call('aux_frequency', frequencyKHz, slot);
     const pllDeadline = performance.now() + 500;
     let pllLocked = false;
     while (!(pllLocked = !!(await this.call('aux_pll'))) && performance.now() < pllDeadline)

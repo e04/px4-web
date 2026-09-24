@@ -184,6 +184,13 @@ export class FullSegPlayer {
     }
     this.renderer!.draw(frame, width, height);
   }
+  /** Draw into another canvas; decoding continues, so the next frame shows there. */
+  setCanvas(canvas: HTMLCanvasElement): void {
+    if (this.closed || canvas === this.canvas) return;
+    this.renderer?.dispose();
+    this.canvas = canvas;
+    if (!this.benchmark) this.renderer = createVideoRenderer(canvas);
+  }
   get volume(): number {
     return this.volumeLevel;
   }

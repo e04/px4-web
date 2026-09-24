@@ -38,6 +38,7 @@ export default function App() {
     addLog,
     stopPlayer: playback.stopPlayer,
     openPlayback: playback.openPlayback,
+    adoptPlayer: playback.adoptPlayer,
     refreshPlayback: playback.refreshPlayback,
     playbackFailure: playback.failure,
   });

@@ -140,8 +140,45 @@ it('tunes the auxiliary satellite tuner without touching the main receiver state
     'aux_current_tsid',
     'aux_capture',
   ]);
+  expect(ccall.mock.calls[0]?.[3]).toHaveLength(1);
   expect(Receiver.auxiliaryIndex('BS1_2')).toBe(1);
   expect(Receiver.auxiliaryIndex(13)).toBe(3);
+});
+
+it('swaps tuner roles when the auxiliary tuner is adopted', async () => {
+  vi.useFakeTimers();
+  const { receiver, ccall } = satelliteReceiver();
+  ccall.mockImplementation(async (name: string) =>
+    name.endsWith('tsid') ? 0x4010 : name.endsWith('pll') || name.endsWith('lock') ? 1 : 0,
+  );
+  receiver.state = 'locked';
+  expect(receiver.adoptAuxiliary('BS1_2')).toBe(false);
+  receiver.state = 'streaming';
+  expect(receiver.adoptAuxiliary('BS1_2')).toBe(true);
+  expect(receiver.receiverIndex).toBe(1);
+  expect(receiver.auxiliaryIndexFor(13)).toBe(2);
+  const tuned = receiver.auxiliaryTune(13);
+  await vi.runAllTimersAsync();
+  expect(await tuned).toBe(true);
+  await receiver.auxiliaryStop();
+  expect(ccall.mock.calls.map(([name]) => name)).toEqual([
+    'receiver_frequency',
+    'receiver_pll',
+    'receiver_acquire',
+    'receiver_lock',
+    'receiver_capture',
+    'receiver_pause',
+  ]);
+  ccall.mockClear();
+  const main = receiver.tune(13);
+  await vi.runAllTimersAsync();
+  expect(await main).toMatchObject({ demodLocked: true, receiverIndex: 3 });
+  expect(ccall.mock.calls.map(([name]) => name)).toEqual([
+    'aux_frequency',
+    'aux_pll',
+    'aux_acquire',
+    'aux_lock',
+  ]);
 });
 
 it('has no auxiliary tuner outside the PX4 family', async () => {
