@@ -36,6 +36,16 @@ const PREVIEW_RELEASE_DELAY = 300;
 
 const NO_EVENTS: TimelineItem[] = [];
 
+/** Service of each timeline lane at `now`; a single entry when the station airs one program. */
+function airingLanes(events: TimelineItem[], now: number) {
+  const lanes: number[] = [];
+  for (const { event, serviceId, lane = 0, lanes: count = 1 } of events) {
+    if (count < 2 || serviceId == null || event.start == null || event.end == null) continue;
+    if (event.start <= now && now < event.end) lanes[lane] = serviceId;
+  }
+  return lanes.filter((serviceId) => serviceId != null);
+}
+
 const BANDS: { value: Broadcast; label: string }[] = [
   { value: 'T', label: '地デジ' },
   { value: 'BS', label: 'BS' },
@@ -156,33 +166,41 @@ export function ChannelGuide({
   // Hovering a station or its timeline previews it; the popup opens after a pause
   // so sweeping across rows does not retune the free tuner for each one.
   const [hovered, setHovered] = useState<string | null>(null);
-  const [previewed, setPreviewed] = useState<string | null>(null);
+  // Service under the pointer on a split station button.
+  const [hoveredService, setHoveredService] = useState<number | null>(null);
+  const [previewed, setPreviewed] = useState<{ value: string; serviceId: number | null } | null>(
+    null,
+  );
   useEffect(() => {
     const timer = window.setTimeout(
-      () => setPreviewed(hovered),
+      () => setPreviewed(hovered ? { value: hovered, serviceId: hoveredService } : null),
       hovered ? PREVIEW_OPEN_DELAY : PREVIEW_RELEASE_DELAY,
     );
     return () => window.clearTimeout(timer);
-  }, [hovered]);
+  }, [hovered, hoveredService]);
   // The tuned station is already on screen; unscanned ones have no service.
-  const previewOption = rows.find(
-    ({ option }) =>
-      option.value === previewed && option.value !== selectedValue && option.serviceId != null,
-  )?.option;
-  const previewValue = previewAvailable && !busy ? previewOption?.value : undefined;
+  const previewOption = rows.find(({ option }) => option.value === previewed?.value)?.option;
+  const previewServiceId = previewed?.serviceId ?? previewOption?.serviceId;
+  const previewTuned =
+    previewOption?.value === selectedValue &&
+    (previewed?.serviceId == null || String(previewServiceId) === service);
+  const previewValue =
+    previewAvailable && !busy && previewServiceId != null && !previewTuned
+      ? previewOption?.value
+      : undefined;
   useEffect(() => {
     onPreview(
-      previewValue && previewOption?.serviceId != null
+      previewValue && previewOption && previewServiceId != null
         ? {
             value: previewValue,
             channel: previewOption.channel,
-            serviceId: previewOption.serviceId,
+            serviceId: previewServiceId,
           }
         : null,
     );
     // The target is keyed by row value; the option object is rebuilt on every EPG update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewValue]);
+  }, [previewValue, previewServiceId]);
   // The preview sits left of the station column when it fits; otherwise it goes
   // above (or below) the row. Placement is decided here rather than by flip,
   // which measures against the viewport instead of the portal target.
@@ -255,14 +273,13 @@ export function ChannelGuide({
         onScroll={(event) => setCullY(Math.floor(event.currentTarget.scrollTop / CULL_STEP))}
       >
         <Box style={{ display: 'flex' }}>
-          <Stack
-            ref={stationsRef}
-            gap={0}
-            w={STATION_WIDTH}
-            style={{ flex: 'none' }}
-          >
-            {rows.map(({ option }, index) => {
+          <Stack ref={stationsRef} gap={0} w={STATION_WIDTH} style={{ flex: 'none' }}>
+            {rows.map(({ option, events }, index) => {
               const selected = option.value === selectedValue;
+              const segments = airingLanes(events, now);
+              const selectedSegment = selected
+                ? segments.findIndex((serviceId) => String(serviceId) === service)
+                : -1;
               return (
                 <Popover
                   key={option.value}
@@ -280,14 +297,39 @@ export function ChannelGuide({
                       mt={index ? ROW_OVERLAP : 0}
                       ref={selected ? selectedRef : undefined}
                       className="channel-guide-station"
-                      data-selected={selected || undefined}
+                      data-selected={(selected && selectedSegment < 0) || undefined}
+                      data-split={segments.length > 1 || undefined}
                       h={ROW_HEIGHT}
                       px="sm"
                       disabled={busy}
                       aria-current={selected || undefined}
-                      onClick={() => select(option)}
+                      // Sub-services airing their own programs split the button like the timeline lanes.
+                      onClick={(event) => {
+                        const segment = (event.target as HTMLElement).closest<HTMLElement>(
+                          '[data-service]',
+                        );
+                        select(
+                          option,
+                          segment ? Number(segment.dataset.service) : option.serviceId,
+                        );
+                      }}
                       {...hover(option.value)}
                     >
+                      {segments.length > 1 &&
+                        segments.map((serviceId, lane) => (
+                          <span
+                            key={serviceId}
+                            className="channel-guide-segment"
+                            data-service={serviceId}
+                            data-selected={lane === selectedSegment || undefined}
+                            onMouseEnter={() => setHoveredService(serviceId)}
+                            onMouseLeave={() => setHoveredService(null)}
+                            style={{
+                              top: `${(lane / segments.length) * 100}%`,
+                              height: `${100 / segments.length}%`,
+                            }}
+                          />
+                        ))}
                       <Group gap="xs" wrap="nowrap">
                         {/* Placeholder keeps names aligned with rows that have a logo. */}
                         {option.logo ? (

@@ -475,7 +475,8 @@ export function useReceiverSession({
     const session = sessionRef.current;
     if (!previewTarget || !connected || scanning || !session?.previewReady) return;
     const { value, channel: previewChannel, serviceId } = previewTarget;
-    const setPreviewState = (state: PreviewState) => setPreview({ value, state });
+    const setPreviewState = (state: PreviewState) =>
+      setPreview({ value: `${value}:${serviceId}`, state });
     let stopped = false;
     let player: FullSegPlayer | undefined;
     // Every step is logged with its elapsed time so a failing preview can be traced.
@@ -935,7 +936,11 @@ export function useReceiverSession({
     cardless,
     b25,
     previewTarget,
-    previewState: (preview?.value === previewTarget?.value && preview?.state) || 'tuning',
+    previewState:
+      (previewTarget &&
+        preview?.value === `${previewTarget.value}:${previewTarget.serviceId}` &&
+        preview.state) ||
+      'tuning',
     previewCanvas,
     previewAvailable: connected && !scanning && !!sessionRef.current?.previewReady,
     setPreviewTarget,

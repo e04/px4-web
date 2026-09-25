@@ -136,6 +136,7 @@ body {
 }
 
 .channel-guide-station {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -173,6 +174,41 @@ body {
 
 .channel-guide-track[data-selected] {
   background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 18%, transparent);
+}
+
+.channel-guide-station[data-split] > :not(.channel-guide-segment) {
+  position: relative;
+  pointer-events: none;
+}
+
+.channel-guide-station[data-split]:hover:not(:disabled) {
+  background-color: transparent;
+}
+
+.channel-guide-segment {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: var(--mantine-radius-xs);
+}
+
+.channel-guide-station:not(:disabled) .channel-guide-segment:hover {
+  background-color: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.channel-guide-segment[data-selected] {
+  background-color: color-mix(in srgb, var(--mantine-primary-color-filled) 70%, transparent);
+}
+
+/* A short, faint divider at the right edge between lanes. */
+.channel-guide-segment + .channel-guide-segment::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 6px;
+  width: 12px;
+  height: 1px;
+  background-color: color-mix(in srgb, currentColor 25%, transparent);
 }
 
 .channel-guide-station:disabled {
