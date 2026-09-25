@@ -1,5 +1,5 @@
-import type { RefObject } from 'react';
-import { ActionIcon, Box, Group, Paper, Progress, Slider, Text } from '@mantine/core';
+import { useEffect, useState, type RefObject } from 'react';
+import { ActionIcon, Box, Button, Group, Paper, Progress, Slider, Text } from '@mantine/core';
 import { DataRemote } from './DataRemote';
 import {
   DataButtonIcon,
@@ -7,8 +7,35 @@ import {
   MaximizeButtonIcon,
   MinimizeButtonIcon,
   PipButtonIcon,
+  StopButtonIcon,
   SubtitlesButtonIcon,
 } from '../icons';
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`
+    : `${minutes}:${seconds}`;
+}
+
+function RecordingIndicator({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <Group gap={6} wrap="nowrap" ml={12} aria-label="Recording" role="status">
+      <Box w={10} h={10} bg="red.6" style={{ borderRadius: '50%', flex: 'none' }} />
+      <Text size="sm" c="white" ff="monospace">
+        {formatElapsed(now - startedAt)}
+      </Text>
+    </Group>
+  );
+}
 
 interface VideoStageProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -31,6 +58,8 @@ interface VideoStageProps {
   dataLoading: boolean;
   controlsIdle: boolean;
   volume: number;
+  recordingStartedAt?: number;
+  recordingSaving: boolean;
   onToggleCaption: () => void;
   onPressData: () => void;
   onDataKey: (key: number, down: boolean) => void;
@@ -39,6 +68,7 @@ interface VideoStageProps {
   onTogglePip: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
+  onToggleRecording: () => void;
   /** Set only in fullscreen, where the page's channel guide is out of sight. */
   onToggleGuide?: () => void;
 }
@@ -64,6 +94,8 @@ export function VideoStage({
   dataLoading,
   controlsIdle,
   volume,
+  recordingStartedAt,
+  recordingSaving,
   onToggleCaption,
   onPressData,
   onDataKey,
@@ -72,8 +104,10 @@ export function VideoStage({
   onTogglePip,
   onToggleFullscreen,
   onVolumeChange,
+  onToggleRecording,
   onToggleGuide,
 }: VideoStageProps) {
+  const recording = recordingStartedAt !== undefined;
   return (
     <Box className="television-ambient-wrap">
       <canvas
@@ -246,6 +280,38 @@ export function VideoStage({
                 size="sm"
                 color="white"
               />
+              {recordingStartedAt !== undefined && (
+                <RecordingIndicator startedAt={recordingStartedAt} />
+              )}
+              {recording ? (
+                <ActionIcon
+                  variant="transparent"
+                  color="white"
+                  size="lg"
+                  // The icon sits inset in its hit area, so pull it toward the timer.
+                  ml={-6}
+                  aria-label="Stop recording"
+                  title="Stop recording and download"
+                  loading={recordingSaving}
+                  loaderProps={{ color: 'white', size: 18 }}
+                  styles={{ loader: { backgroundColor: 'transparent' } }}
+                  onClick={onToggleRecording}
+                >
+                  <StopButtonIcon />
+                </ActionIcon>
+              ) : (
+                <Button
+                  variant="transparent"
+                  color="white"
+                  size="compact-sm"
+                  ml={12}
+                  px={6}
+                  title="Record"
+                  onClick={onToggleRecording}
+                >
+                  REC
+                </Button>
+              )}
             </Group>
             {dataVisible && !pipEnabled && (
               <DataRemote onKey={onDataKey} readZipCode={readZipCode} writeZipCode={writeZipCode} />

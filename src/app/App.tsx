@@ -32,7 +32,8 @@ export default function App() {
   const playback = usePlayback({ sessionRef, addLog, setStatus, setBusy });
   const session = useReceiverSession({
     sessionRef,
-    busy,
+    // Recording holds the tuned station: no channel, service or scan changes until it stops.
+    busy: busy || playback.recording,
     setBusy,
     setStatus,
     addLog,
@@ -68,10 +69,10 @@ export default function App() {
     service: session.service,
     channelOptions: session.channelOptions,
     now: session.epgNow,
-    busy,
+    busy: busy || playback.recording,
     scanning: session.scanning,
     onScan: (band: Broadcast) => void session.runScan(band),
-    previewAvailable: session.previewAvailable,
+    previewAvailable: session.previewAvailable && !playback.recording,
     previewState: session.previewState,
     previewSurface: session.previewSurface,
     onPreview: session.setPreviewTarget,
@@ -144,6 +145,17 @@ export default function App() {
                 onTogglePip={() => void playback.togglePip(!playback.pipEnabled)}
                 onToggleFullscreen={() => void playback.toggleFullscreen()}
                 onVolumeChange={playback.setVolume}
+                recordingStartedAt={playback.recordingStartedAt}
+                recordingSaving={playback.recordingSaving}
+                onToggleRecording={() => {
+                  if (playback.recording) void playback.stopRecording();
+                  else
+                    void playback.startRecording(
+                      [selectedProgram?.stationName, currentProgram?.title]
+                        .filter(Boolean)
+                        .join(' '),
+                    );
+                }}
                 onToggleGuide={playback.isFullscreen ? toggleGuide : undefined}
               />
               {playback.pipControlsHost &&

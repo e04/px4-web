@@ -5,6 +5,7 @@ import { isDocumentPipSupported, openPip, type PipHandle } from '../../media/pip
 import type { ReceiverSession } from '../../usb/receiver-session';
 import type { DataBroadcast } from '../../media/data-broadcast';
 import { aribKeyFromEvent } from '../../media/data-keys';
+import { TsPreroll, TsRecorder, downloadBlob } from '../../media/recorder';
 import {
   CAPTION_KEY,
   DATA_BROADCAST_KEY,
@@ -64,6 +65,13 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ambientCanvasRef = useRef<HTMLCanvasElement>(null);
   const hydratedRef = useRef(false);
+  const recorderRef = useRef<{ recorder: TsRecorder; filename: string } | undefined>(undefined);
+  const recordStartingRef = useRef(false);
+  // Clear TS from the last 10 s of playback, prepended when a recording starts.
+  const prerollRef = useRef(new TsPreroll(10_000));
+  // Set from the start of a recording until its download is handed off.
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number>();
+  const [recordingSaving, setRecordingSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,14 +101,68 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     setPipEnabled(false);
   }, []);
 
+  const finishRecording = useCallback(async () => {
+    const active = recorderRef.current;
+    if (!active) return;
+    recorderRef.current = undefined;
+    setRecordingSaving(true);
+    try {
+      const blob = await active.recorder.stop();
+      if (blob.size) {
+        downloadBlob(blob, active.filename);
+        addLog(`Recording saved: ${active.filename} (${(blob.size / 1048576).toFixed(1)} MiB)`);
+      } else addLog('Recording stopped with no data', true);
+    } catch (error) {
+      addLog(`Recording failed: ${error instanceof Error ? error.message : String(error)}`, true);
+    } finally {
+      setRecordingStartedAt(undefined);
+      setRecordingSaving(false);
+    }
+  }, [addLog]);
+
+  const startRecording = useCallback(
+    async (label: string) => {
+      if (!playerRef.current || recorderRef.current || recordStartingRef.current) return;
+      recordStartingRef.current = true;
+      try {
+        const recorder = await TsRecorder.start();
+        // Chunks kept arriving in the preroll while the store opened, so nothing is skipped.
+        const preroll = prerollRef.current.take();
+        for (const bytes of preroll.chunks) recorder.push(bytes);
+        const startedAt = preroll.startedAt ?? Date.now();
+        const now = new Date(startedAt);
+        const pad = (value: number) => String(value).padStart(2, '0');
+        const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const name = label.replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '');
+        recorder.onError = (error) => {
+          addLog(`Recording write failed: ${error}`, true);
+          void finishRecording();
+        };
+        recorderRef.current = { recorder, filename: `${name ? `${name}_` : ''}${stamp}.ts` };
+        setRecordingStartedAt(startedAt);
+        addLog('Recording started');
+      } catch (error) {
+        addLog(`Recording failed: ${error instanceof Error ? error.message : String(error)}`, true);
+      } finally {
+        recordStartingRef.current = false;
+      }
+    },
+    [addLog, finishRecording],
+  );
+
   // A channel switch passes keepPip so the PiP window stays open for the next player.
   const stopPlayer = useCallback(
     (message?: string, keepPip = false) => {
-      if (!keepPip) closePip();
+      // B25 recovery keeps PiP and the recording; anything else ends playback for good.
+      if (!keepPip) {
+        closePip();
+        void finishRecording();
+      }
       captionRef.current?.destroy();
       captionRef.current = undefined;
       playerRef.current?.close();
       playerRef.current = undefined;
+      prerollRef.current.reset();
       playbackErrorRef.current = undefined;
       setFailure(undefined);
       const session = sessionRef.current;
@@ -114,8 +176,19 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       setPlayback(undefined);
       if (message) addLog(message);
     },
-    [addLog, closePip, sessionRef],
+    [addLog, closePip, finishRecording, sessionRef],
   );
+
+  useEffect(() => {
+    if (failure) void finishRecording();
+  }, [failure, finishRecording]);
+
+  useEffect(() => {
+    if (recordingStartedAt === undefined) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [recordingStartedAt]);
 
   // Wire a player (new, or a preview already decoding) to the session's B25 output.
   const attachPlayer = useCallback(
@@ -139,6 +212,9 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
         captionRef.current = overlay;
       }
       session.b25.onOutput = (bytes) => {
+        const recording = recorderRef.current;
+        if (recording) recording.recorder.push(bytes);
+        else prerollRef.current.push(bytes);
         void player.push(bytes).catch((error) => {
           if (playerRef.current === player)
             playbackErrorRef.current ??= error instanceof Error ? error.message : String(error);
@@ -471,5 +547,10 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     togglePip,
     toggleFullscreen,
     refreshPlayback,
+    recording: recordingStartedAt !== undefined,
+    recordingStartedAt,
+    recordingSaving,
+    startRecording,
+    stopRecording: finishRecording,
   };
 }
