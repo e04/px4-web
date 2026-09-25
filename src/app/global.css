@@ -344,3 +344,39 @@ body {
 .data-remote-key:active {
   filter: brightness(1.4);
 }
+
+/* A translucent speech bubble next to the remote, in the remote's colours. */
+.data-remote-settings {
+  padding: 12px;
+  border-color: rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(16px);
+  color: #fff;
+  cursor: default;
+  user-select: text;
+}
+
+.data-remote-settings .mantine-InputWrapper-label {
+  /* Inline, it sits on the wrapper's taller line box and leaves a gap above. */
+  display: block;
+  color: #fff;
+}
+
+.data-remote-settings .mantine-InputWrapper-description {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.data-remote-settings .mantine-Input-input {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.data-remote-settings .mantine-Input-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.data-remote-settings .mantine-Input-input:focus {
+  border-color: rgba(255, 255, 255, 0.7);
+}

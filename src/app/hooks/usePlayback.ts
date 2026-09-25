@@ -38,6 +38,8 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   // Set by a d press before the engine exists: the new engine presses d once it is ready.
   const showDataRef = useRef(false);
   const [dataVisible, setDataVisible] = useState(false);
+  // A d press is waiting for the data screen to change (or for the engine to start).
+  const [dataLoading, setDataLoading] = useState(false);
   // Bumped per attached player so data broadcasting restarts on every channel or B25 swap.
   const [attached, setAttached] = useState<{ serviceId: number; serial: number }>();
   const dataRef = useRef<DataBroadcast | undefined>(undefined);
@@ -301,6 +303,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
           attached.serviceId,
           (message) => addLog(message, true),
           setDataVisible,
+          setDataLoading,
         );
         data.setHidden(!!pipHandleRef.current);
         if (showDataRef.current) data.pressData();
@@ -309,7 +312,9 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
         b25.onDataOutput = (bytes) => data?.push(bytes);
         await b25.request('data', { enabled: true });
       } catch (error) {
-        if (!cancelled) addLog(error instanceof Error ? error.message : String(error), true);
+        if (cancelled) return;
+        setDataLoading(false);
+        addLog(error instanceof Error ? error.message : String(error), true);
       }
     })();
     return () => {
@@ -319,6 +324,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
       data?.destroy();
       if (dataRef.current === data) dataRef.current = undefined;
       setDataVisible(false);
+      setDataLoading(false);
     };
   }, [dataEnabled, attached, sessionRef, addLog]);
 
@@ -350,12 +356,19 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     if (dataRef.current) dataRef.current.pressData();
     else {
       showDataRef.current = true;
+      setDataLoading(true);
       setDataEnabled(true);
     }
   }, []);
 
   const pressDataKey = useCallback((key: number, down: boolean) => {
     dataRef.current?.key(key, down);
+  }, []);
+
+  const readZipCode = useCallback(() => dataRef.current?.zipCode ?? '', []);
+
+  const writeZipCode = useCallback((zipCode: string) => {
+    if (dataRef.current) dataRef.current.zipCode = zipCode;
   }, []);
 
   useEffect(() => {
@@ -434,7 +447,10 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     setCaptionEnabled,
     pressData,
     dataVisible,
+    dataLoading,
     pressDataKey,
+    readZipCode,
+    writeZipCode,
     bmlHostRef,
     pipEnabled,
     pipControlsHost,

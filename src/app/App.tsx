@@ -133,11 +133,14 @@ export default function App() {
                 guideOpen={guideOpen}
                 captionEnabled={playback.captionEnabled}
                 dataVisible={playback.dataVisible}
+                dataLoading={playback.dataLoading}
                 controlsIdle={playback.controlsIdle}
                 volume={playback.volume}
                 onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
                 onPressData={playback.pressData}
                 onDataKey={playback.pressDataKey}
+                readZipCode={playback.readZipCode}
+                writeZipCode={playback.writeZipCode}
                 onTogglePip={() => void playback.togglePip(!playback.pipEnabled)}
                 onToggleFullscreen={() => void playback.toggleFullscreen()}
                 onVolumeChange={playback.setVolume}

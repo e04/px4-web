@@ -28,11 +28,14 @@ interface VideoStageProps {
   guideOpen: boolean;
   captionEnabled: boolean;
   dataVisible: boolean;
+  dataLoading: boolean;
   controlsIdle: boolean;
   volume: number;
   onToggleCaption: () => void;
   onPressData: () => void;
   onDataKey: (key: number, down: boolean) => void;
+  readZipCode: () => string;
+  writeZipCode: (zipCode: string) => void;
   onTogglePip: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
@@ -58,11 +61,14 @@ export function VideoStage({
   guideOpen,
   captionEnabled,
   dataVisible,
+  dataLoading,
   controlsIdle,
   volume,
   onToggleCaption,
   onPressData,
   onDataKey,
+  readZipCode,
+  writeZipCode,
   onTogglePip,
   onToggleFullscreen,
   onVolumeChange,
@@ -178,6 +184,10 @@ export function VideoStage({
                 aria-pressed={dataVisible}
                 title="Data broadcasting (d)"
                 disabled={pipEnabled}
+                loading={dataLoading}
+                loaderProps={{ color: 'white', size: 18 }}
+                // Mantine tints the loader's backdrop, which shows as a box on the bare icon.
+                styles={{ loader: { backgroundColor: 'transparent' } }}
                 onClick={onPressData}
               >
                 <DataButtonIcon />
@@ -237,7 +247,9 @@ export function VideoStage({
                 color="white"
               />
             </Group>
-            {dataVisible && !pipEnabled && <DataRemote onKey={onDataKey} />}
+            {dataVisible && !pipEnabled && (
+              <DataRemote onKey={onDataKey} readZipCode={readZipCode} writeZipCode={writeZipCode} />
+            )}
             {(stationName || programName) && (
               <div
                 className="video-controls video-program-info"
