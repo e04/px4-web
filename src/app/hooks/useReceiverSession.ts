@@ -34,6 +34,7 @@ import { logoDataUrl, logoKey, type LogoData } from '../../logo';
 import { loadLogos, mergeLogos, type LogoLibrary } from '../../logo-store';
 import { channelsFor, parseChannel, type Broadcast, type Channel } from '../../channels';
 import { FullSegPlayer } from '../../media/player';
+import { CaptionOverlay } from '../../media/captions';
 
 export type ChannelOption = ReturnType<typeof useReceiverSession>['channelOptions'][number];
 
@@ -190,7 +191,15 @@ export function useReceiverSession({
   const [preview, setPreview] = useState<{ value: string; state: PreviewState }>();
   const [crawlHeld, setCrawlHeld] = useState(false);
   // One detached canvas the preview popup adopts; the player keeps drawing into it.
-  const previewCanvas = useMemo(() => document.createElement('canvas'), []);
+  // It shares a host with the preview's caption layers, and the popup mounts that host.
+  // Both are built in one memo: StrictMode reruns it, and a rerun must not move the canvas.
+  const { previewCanvas, previewSurface } = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    const surface = document.createElement('div');
+    surface.style.cssText = 'position: relative; width: 100%; height: 100%';
+    surface.appendChild(canvas);
+    return { previewCanvas: canvas, previewSurface: surface };
+  }, []);
   // The tuned preview's player; selecting its station hands it to main playback.
   const previewPlayerRef = useRef<
     { channel: string; serviceId: number; player: FullSegPlayer; adopted?: boolean } | undefined
@@ -511,6 +520,7 @@ export function useReceiverSession({
       setPreview({ value: `${value}:${serviceId}`, state });
     let stopped = false;
     let player: FullSegPlayer | undefined;
+    let captions: CaptionOverlay | undefined;
     // Every step is logged with its elapsed time so a failing preview can be traced.
     const started = performance.now();
     let stage = 'waiting for tuner';
@@ -552,6 +562,12 @@ export function useReceiverSession({
       const current = new FullSegPlayer(previewCanvas);
       player = current;
       current.setVolume(0);
+      // Previews always show captions, whatever the main playback setting is.
+      captions = new CaptionOverlay(previewSurface, () => current.clockSeconds);
+      captions.setEnabled(true);
+      current.onCaption = (packet) =>
+        captions?.push(packet.kind, packet.bytes, packet.pts / 90000, packet.dts / 90000);
+      current.onCaptionReset = () => captions?.reset();
       current.onFirstFrame = () => {
         if (stopped) return;
         playing = true;
@@ -607,8 +623,14 @@ export function useReceiverSession({
         if (!handle?.adopted) player?.close();
       };
       closePlayer();
+      captions?.destroy();
       // Also covers a player created after this cleanup, while the chain was pending.
-      void done.finally(closePlayer).catch(() => {});
+      void done
+        .finally(() => {
+          closePlayer();
+          captions?.destroy();
+        })
+        .catch(() => {});
     };
     // Session identity changes always toggle `connected`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -980,7 +1002,7 @@ export function useReceiverSession({
         preview?.value === `${previewTarget.value}:${previewTarget.serviceId}` &&
         preview.state) ||
       'tuning',
-    previewCanvas,
+    previewSurface,
     previewAvailable: connected && !scanning && !!sessionRef.current?.previewReady,
     setPreviewTarget,
     connect,

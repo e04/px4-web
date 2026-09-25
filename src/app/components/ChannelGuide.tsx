@@ -62,7 +62,7 @@ interface ChannelGuideProps {
   scanning: boolean;
   previewAvailable: boolean;
   previewState: PreviewState;
-  previewCanvas: HTMLCanvasElement;
+  previewSurface: HTMLDivElement;
   onSelect: (channel: string, serviceId: number | null) => void;
   onScan: (band: Broadcast) => void;
   onPreview: (target: PreviewTarget | null) => void;
@@ -73,11 +73,11 @@ interface ChannelGuideProps {
 }
 
 function StationPreview({
-  canvas,
+  surface,
   state,
   width,
 }: {
-  canvas: HTMLCanvasElement;
+  surface: HTMLDivElement;
   state: PreviewState;
   width: number;
 }) {
@@ -93,9 +93,10 @@ function StationPreview({
         w="100%"
         h="100%"
         className="station-preview-canvas"
-        style={{ visibility: state === 'playing' ? undefined : 'hidden' }}
+        // Opacity, not visibility: the caption layers force their own `visibility: visible`.
+        style={{ opacity: state === 'playing' ? undefined : 0 }}
         ref={(node: HTMLDivElement | null) => {
-          if (node && canvas.parentNode !== node) node.appendChild(canvas);
+          if (node && surface.parentNode !== node) node.appendChild(surface);
         }}
       />
       {state !== 'playing' && (
@@ -123,7 +124,7 @@ export function ChannelGuide({
   scanning,
   previewAvailable,
   previewState,
-  previewCanvas,
+  previewSurface,
   onSelect,
   onScan,
   onPreview,
@@ -353,7 +354,7 @@ export function ChannelGuide({
                     style={{ overflow: 'hidden', pointerEvents: 'none' }}
                   >
                     <StationPreview
-                      canvas={previewCanvas}
+                      surface={previewSurface}
                       state={previewState}
                       width={PREVIEW_WIDTH}
                     />

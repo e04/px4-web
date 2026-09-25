@@ -73,7 +73,7 @@ export default function App() {
     onScan: (band: Broadcast) => void session.runScan(band),
     previewAvailable: session.previewAvailable,
     previewState: session.previewState,
-    previewCanvas: session.previewCanvas,
+    previewSurface: session.previewSurface,
     onPreview: session.setPreviewTarget,
   };
 
