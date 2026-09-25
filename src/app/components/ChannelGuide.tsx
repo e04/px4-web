@@ -246,11 +246,11 @@ export function ChannelGuide({
             className="scan-button"
             size="xs"
             color="gray"
-            variant="outline"
+            variant="transparent"
             disabled={busy || scanning}
             onClick={() => onScan(viewBand)}
           >
-            Scan channels
+            Scan channels...
           </Button>
         )}
       </Group>
