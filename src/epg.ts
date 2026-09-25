@@ -20,7 +20,7 @@ function collapseEvents(events: Iterable<ProgramEvent | null | undefined>): Prog
             ...event,
             title: known.title,
             description: known.description,
-            genres: event.genres.length ? event.genres : known.genres,
+            genres: event.genres?.length ? event.genres : known.genres,
           }
         : event,
     );

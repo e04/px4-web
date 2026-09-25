@@ -29,7 +29,7 @@ const GENRE_COLORS = [
 ];
 
 function genreColor(event: ProgramEvent) {
-  const genre = event.genres.find((item) => item.level1 < GENRE_COLORS.length);
+  const genre = event.genres?.find((item) => item.level1 < GENRE_COLORS.length);
   return genre && GENRE_COLORS[genre.level1];
 }
 
