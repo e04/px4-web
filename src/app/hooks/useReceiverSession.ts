@@ -55,6 +55,12 @@ export type PreviewState = 'tuning' | 'playing' | 'failed';
 // The EPG crawl resumes only after the pointer has been off the guide this long,
 // so moving between rows does not retune the free tuner in between.
 const CRAWL_RESUME_MS = 5000;
+// CDT repeats far less often than EIT: a channel missing a logo is visited
+// first, held up to LOGO_HOLD_MS per visit and revisited every
+// LOGO_RETRY_MS, giving up after LOGO_ATTEMPTS visits (per page session).
+const LOGO_HOLD_MS = 5 * 60000;
+const LOGO_RETRY_MS = 5 * 60000;
+const LOGO_ATTEMPTS = 6;
 
 export interface ScanResult {
   channel: Channel;
@@ -186,6 +192,10 @@ export function useReceiverSession({
   scanRef.current = scan;
   // The free tuner serves one of the EPG crawl or a preview; each waits for the previous user.
   const auxDoneRef = useRef<Promise<void>>(Promise.resolve());
+  // Channel → crawl visits that ended with a logo still missing.
+  const logoAttemptsRef = useRef(new Map<string, number>());
+  // Channels the crawl has seen SDT for; unseen ones may reference unknown logos.
+  const crawledRef = useRef(new Set<string>());
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   // Keyed by row so a newly opened popup never shows the previous station's state.
   const [preview, setPreview] = useState<{ value: string; state: PreviewState }>();
@@ -467,8 +477,9 @@ export function useReceiverSession({
     if (!connected || scanning || crawlHeld || !session?.hasEpgTuner) return;
     const controller = new AbortController();
     const previous = auxDoneRef.current;
-    // Wait for a missing logo once per channel; CDT repeats far less often than EIT.
-    const logoWaited = new Set<string>();
+    const attempts = logoAttemptsRef.current;
+    const crawled = crawledRef.current;
+    const trying = (key: string) => (attempts.get(key) ?? 0) < LOGO_ATTEMPTS;
     const done = previous.then(() =>
       crawlEpg(session, {
         signal: controller.signal,
@@ -477,11 +488,23 @@ export function useReceiverSession({
             .flatMap(channelsFor)
             .filter((item) => scanRef.current[String(item)]?.locked),
         skip: (item) => String(item) === channelRef.current,
-        hold: (item, transport) => !logoWaited.has(String(item)) && logoMissing(transport),
+        priority: (item) => {
+          const key = String(item);
+          if (!trying(key)) return false;
+          const refs = logoLibraryRef.current.channels[key];
+          if (!refs) return !crawled.has(key);
+          return Object.values(refs).some((ref) => !logoLibraryRef.current.logos[logoKey(ref)]);
+        },
+        hold: (item, transport) => trying(String(item)) && logoMissing(transport),
+        holdMaxDwellMs: LOGO_HOLD_MS,
+        priorityIntervalMs: LOGO_RETRY_MS,
         onPrograms: async (item, programs, logos) => {
           const key = String(item);
-          logoWaited.add(key);
+          crawled.add(key);
+          const missing = logoMissing({ programs, logos });
           recordLogos(key, programs, logos);
+          if (missing) attempts.set(key, (attempts.get(key) ?? 0) + 1);
+          else attempts.delete(key);
           // The main tuner now owns this channel's EPG.
           if (key === channelRef.current) return;
           const next = mergeEpg(await loadEpg(key), programs);

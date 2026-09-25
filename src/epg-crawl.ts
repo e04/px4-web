@@ -23,10 +23,18 @@ export interface EpgCrawlOptions {
   quietMs?: number;
   maxDwellMs?: number;
   /**
-   * Keep dwelling past the quiet period (up to maxDwellMs) while this returns
-   * true, e.g. while a service's logo has not arrived in CDT yet.
+   * Keep dwelling past the quiet period (up to holdMaxDwellMs) while this
+   * returns true, e.g. while a service's logo has not arrived in CDT yet.
    */
   hold?: (channel: Channel, transport: EpgCrawlSession['epgTransport']) => boolean;
+  /** Dwell cap while hold() is true; defaults to maxDwellMs. */
+  holdMaxDwellMs?: number;
+  /**
+   * Channels for which this returns true are visited first in every round and
+   * revisited every priorityIntervalMs between rounds, e.g. while a logo is missing.
+   */
+  priority?: (channel: Channel) => boolean;
+  priorityIntervalMs?: number;
   pollMs?: number;
   /** Pause between complete rounds. */
   roundIntervalMs?: number;
@@ -72,13 +80,23 @@ export async function crawlEpg(session: EpgCrawlSession, options: EpgCrawlOption
     minDwellMs = 15000,
     quietMs = 10000,
     maxDwellMs = 60000,
+    holdMaxDwellMs = maxDwellMs,
     pollMs = 1000,
     roundIntervalMs = 30 * 60000,
+    priorityIntervalMs = 5 * 60000,
     idleMs = 2000,
   } = options;
+  const prioritized = (channel: Channel) => options.priority?.(channel) ?? false;
+  let nextRound = 0;
   try {
     while (!signal.aborted) {
-      const channels = options.channels();
+      const all = options.channels();
+      const fullRound = Date.now() >= nextRound;
+      const urgent = all.filter(prioritized);
+      // Between full rounds only the prioritized channels are revisited.
+      const channels = fullRound
+        ? [...urgent, ...all.filter((channel) => !urgent.includes(channel))]
+        : urgent;
       let visited = 0;
       for (let index = 0; index < channels.length && !signal.aborted;) {
         const channel = channels[index]!;
@@ -106,13 +124,11 @@ export async function crawlEpg(session: EpgCrawlSession, options: EpgCrawlOption
               count = next;
               lastChange = now;
             }
-            if (now - start >= maxDwellMs) break;
-            if (
-              now - start >= minDwellMs &&
-              now - lastChange >= quietMs &&
-              !options.hold?.(channel, session.epgTransport)
-            )
-              break;
+            const elapsed = now - start;
+            if (elapsed >= holdMaxDwellMs) break;
+            if (elapsed < minDwellMs) continue;
+            const held = options.hold?.(channel, session.epgTransport) ?? false;
+            if (!held && (elapsed >= maxDwellMs || now - lastChange >= quietMs)) break;
           }
           const programs = session.epgTransport?.programs;
           if (!signal.aborted && programs && count > 0) {
@@ -126,8 +142,19 @@ export async function crawlEpg(session: EpgCrawlSession, options: EpgCrawlOption
       options.onChannel?.(null);
       if (signal.aborted) break;
       await session.stopEpgTuner().catch(() => {});
-      options.onRound?.(visited);
-      await wait(channels.length ? roundIntervalMs : idleMs, signal);
+      if (fullRound) {
+        options.onRound?.(visited);
+        nextRound = Date.now() + roundIntervalMs;
+      }
+      const untilRound = Math.max(0, nextRound - Date.now());
+      await wait(
+        !all.length
+          ? idleMs
+          : all.some(prioritized)
+            ? Math.min(priorityIntervalMs, untilRound)
+            : untilRound,
+        signal,
+      );
     }
   } finally {
     options.onChannel?.(null);

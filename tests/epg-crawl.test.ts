@@ -137,3 +137,30 @@ it('dwells past the quiet period while hold() asks for more, up to maxDwellMs', 
   expect(dwell[0]).toBeGreaterThanOrEqual(10000);
   expect(dwell[1]).toBeLessThan(5000);
 });
+
+it('visits prioritized channels first and revisits them between full rounds', async () => {
+  vi.useFakeTimers();
+  const { session, tuned } = fakeSession(() => true);
+  const controller = new AbortController();
+  // Channel 14 gets its logo on the third visit.
+  let visits14 = 0;
+  const done = crawlEpg(session, {
+    signal: controller.signal,
+    channels: () => [13, 14, 15],
+    minDwellMs: 1000,
+    quietMs: 1000,
+    pollMs: 500,
+    roundIntervalMs: 60000,
+    priorityIntervalMs: 10000,
+    priority: (channel) => channel === 14 && visits14 < 3,
+    onPrograms: (channel) => {
+      if (channel === 14) visits14++;
+    },
+  });
+  await vi.advanceTimersByTimeAsync(90000);
+  controller.abort();
+  await vi.runAllTimersAsync();
+  await done;
+  vi.useRealTimers();
+  expect(tuned).toEqual(['14', '13', '15', '14', '14', '13', '14', '15']);
+});
