@@ -268,3 +268,79 @@ body {
   backdrop-filter: blur(16px);
   color: var(--mantine-color-text);
 }
+
+.data-remote {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 132px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  user-select: none;
+  cursor: grab;
+  touch-action: none;
+}
+
+.data-remote:active {
+  cursor: grabbing;
+}
+
+.data-remote-grip {
+  /* A thin bar inside a taller, invisible drag target. */
+  display: flex;
+  align-items: center;
+  height: 12px;
+  margin: -6px 24px -2px;
+}
+
+.data-remote-grip::before {
+  content: '';
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.data-remote-row {
+  display: flex;
+  gap: 4px;
+}
+
+.data-remote-row > * {
+  flex: 1;
+}
+
+.data-remote-pad {
+  display: grid;
+  grid-template-areas:
+    '. up .'
+    'left enter right'
+    '. down .';
+  gap: 4px;
+}
+
+.data-remote-digits {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.data-remote-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.data-remote-key:active {
+  filter: brightness(1.4);
+}

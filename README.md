@@ -16,3 +16,4 @@ DEMO: https://e04.github.io/px4-web/
 - [FFmpeg](https://github.com/FFmpeg/FFmpeg) `n7.1.1`（`db69d06eeeab4f46da15030a80d539efb4503ca8`、LGPL-2.1-or-later; MPEG-2 Video / AAC のみ有効。詳細は同梱の `public/media-licenses/`）
 -  `aribb24.js`（MIT、© monyone）
 -  `arib-mmt-tlv-ts`（MIT）
+-  [web-bml](https://github.com/otya128/web-bml)（MIT、© otya128）。データ放送（BML）のカルーセル復号と表示。フォントは `web-bml-fonts`（Kosugi / Kosugi Maru、Apache-2.0）。依存ライブラリを含む詳細は同梱の `public/bml-licenses/`

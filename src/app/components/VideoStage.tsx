@@ -1,6 +1,8 @@
 import type { RefObject } from 'react';
 import { ActionIcon, Box, Group, Paper, Progress, Slider, Text } from '@mantine/core';
+import { DataRemote } from './DataRemote';
 import {
+  DataButtonIcon,
   GuideButtonIcon,
   MaximizeButtonIcon,
   MinimizeButtonIcon,
@@ -13,6 +15,7 @@ interface VideoStageProps {
   ambientCanvasRef: RefObject<HTMLCanvasElement | null>;
   videoWrapRef: RefObject<HTMLDivElement | null>;
   videoPaperRef: RefObject<HTMLDivElement | null>;
+  bmlHostRef: RefObject<HTMLDivElement | null>;
   ambientVisible: boolean;
   playing: boolean;
   stationName: string;
@@ -24,9 +27,12 @@ interface VideoStageProps {
   isFullscreen: boolean;
   guideOpen: boolean;
   captionEnabled: boolean;
+  dataVisible: boolean;
   controlsIdle: boolean;
   volume: number;
   onToggleCaption: () => void;
+  onPressData: () => void;
+  onDataKey: (key: number, down: boolean) => void;
   onTogglePip: () => void;
   onToggleFullscreen: () => void;
   onVolumeChange: (volume: number) => void;
@@ -39,6 +45,7 @@ export function VideoStage({
   ambientCanvasRef,
   videoWrapRef,
   videoPaperRef,
+  bmlHostRef,
   ambientVisible,
   playing,
   stationName,
@@ -50,9 +57,12 @@ export function VideoStage({
   isFullscreen,
   guideOpen,
   captionEnabled,
+  dataVisible,
   controlsIdle,
   volume,
   onToggleCaption,
+  onPressData,
+  onDataKey,
   onTogglePip,
   onToggleFullscreen,
   onVolumeChange,
@@ -102,6 +112,7 @@ export function VideoStage({
             height={540}
             aria-label="Television playback"
           />
+          <div ref={bmlHostRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
         </div>
         {pipEnabled && playing && (
           <div
@@ -161,6 +172,18 @@ export function VideoStage({
               </ActionIcon>
               <ActionIcon
                 variant="transparent"
+                color={dataVisible ? 'blue' : 'white'}
+                size="lg"
+                aria-label="Data broadcasting (d)"
+                aria-pressed={dataVisible}
+                title="Data broadcasting (d)"
+                disabled={pipEnabled}
+                onClick={onPressData}
+              >
+                <DataButtonIcon />
+              </ActionIcon>
+              <ActionIcon
+                variant="transparent"
                 color={pipEnabled ? 'blue' : 'white'}
                 size="lg"
                 aria-label={pipEnabled ? 'Exit picture-in-picture' : 'Show picture-in-picture'}
@@ -214,6 +237,7 @@ export function VideoStage({
                 color="white"
               />
             </Group>
+            {dataVisible && !pipEnabled && <DataRemote onKey={onDataKey} />}
             {(stationName || programName) && (
               <div
                 className="video-controls video-program-info"

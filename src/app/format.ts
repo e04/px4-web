@@ -1,5 +1,12 @@
 import { parseChannel } from '../channels';
-import { CAPTION_KEY, CHANNEL_KEY, VOLUME_KEY, loadValue, settingsStore } from '../storage';
+import {
+  CAPTION_KEY,
+  CHANNEL_KEY,
+  DATA_BROADCAST_KEY,
+  VOLUME_KEY,
+  loadValue,
+  settingsStore,
+} from '../storage';
 import type { ProgramEvent } from '../transport/program-info';
 
 export const stateLabels: Record<string, string> = {
@@ -61,6 +68,10 @@ export async function loadChannel(): Promise<string> {
 export async function loadCaptionEnabled(): Promise<boolean> {
   const value = await loadValue<string | boolean>(CAPTION_KEY, settingsStore);
   return value === 'off' || value === false ? false : DEFAULT_CAPTION_ENABLED;
+}
+
+export async function loadDataBroadcastEnabled(): Promise<boolean> {
+  return (await loadValue<boolean>(DATA_BROADCAST_KEY, settingsStore)) === true;
 }
 
 export async function loadVolume(): Promise<number> {

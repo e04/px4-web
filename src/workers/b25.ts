@@ -21,6 +21,11 @@ const output = (bytes: Uint8Array) => {
     const copy = bytes.slice().buffer;
     self.postMessage({ type: 'clear-ts', bytes: copy }, { transfer: [copy] });
   }
+  if (decoder?.filter.dataEnabled) {
+    const data = decoder.filter.takeData();
+    if (data.length)
+      self.postMessage({ type: 'data-ts', bytes: data.buffer }, { transfer: [data.buffer] });
+  }
 };
 const snapshot = () => ({
   inputBytes,
@@ -79,7 +84,11 @@ self.onmessage = (event: MessageEvent) => {
         await decoder.flush(output);
         capture.stop();
       } else if (type === 'playback') playback = !!event.data.enabled;
-      else if (type === 'record') capture.start(performance.now());
+      else if (type === 'data') {
+        if (!decoder) throw new Error('B25 not initialized');
+        decoder.filter.dataEnabled = !!event.data.enabled;
+        decoder.filter.takeData();
+      } else if (type === 'record') capture.start(performance.now());
       else if (type === 'download') capture.stop();
       self.postMessage({
         id,

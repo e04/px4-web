@@ -65,3 +65,17 @@ export function SubtitlesButtonIcon() {
     />
   );
 }
+
+export function DataButtonIcon() {
+  return (
+    <VideoButtonIcon
+      path={
+        <>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <circle cx="11" cy="13" r="3" />
+          <path d="M14 7v9" />
+        </>
+      }
+    />
+  );
+}

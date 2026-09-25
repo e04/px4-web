@@ -3,8 +3,22 @@ import { FullSegPlayer } from '../../media/player';
 import { CaptionOverlay } from '../../media/captions';
 import { isDocumentPipSupported, openPip, type PipHandle } from '../../media/pip';
 import type { ReceiverSession } from '../../usb/receiver-session';
-import { CAPTION_KEY, VOLUME_KEY, saveValue, settingsStore } from '../../storage';
-import { DEFAULT_CAPTION_ENABLED, DEFAULT_VOLUME, loadCaptionEnabled, loadVolume } from '../format';
+import type { DataBroadcast } from '../../media/data-broadcast';
+import { aribKeyFromEvent } from '../../media/data-keys';
+import {
+  CAPTION_KEY,
+  DATA_BROADCAST_KEY,
+  VOLUME_KEY,
+  saveValue,
+  settingsStore,
+} from '../../storage';
+import {
+  DEFAULT_CAPTION_ENABLED,
+  DEFAULT_VOLUME,
+  loadCaptionEnabled,
+  loadDataBroadcastEnabled,
+  loadVolume,
+} from '../format';
 
 export type PlayerSnapshot = FullSegPlayer['snapshot'];
 
@@ -20,6 +34,14 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   const [playing, setPlaying] = useState(false);
   const [videoVisible, setVideoVisible] = useState(false);
   const [captionEnabled, setCaptionEnabled] = useState(DEFAULT_CAPTION_ENABLED);
+  const [dataEnabled, setDataEnabled] = useState(false);
+  // Set by a d press before the engine exists: the new engine presses d once it is ready.
+  const showDataRef = useRef(false);
+  const [dataVisible, setDataVisible] = useState(false);
+  // Bumped per attached player so data broadcasting restarts on every channel or B25 swap.
+  const [attached, setAttached] = useState<{ serviceId: number; serial: number }>();
+  const dataRef = useRef<DataBroadcast | undefined>(undefined);
+  const bmlHostRef = useRef<HTMLDivElement>(null);
   const [pipEnabled, setPipEnabled] = useState(false);
   const [pipControlsHost, setPipControlsHost] = useState<HTMLElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -44,9 +66,14 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [caption, level] = await Promise.all([loadCaptionEnabled(), loadVolume()]);
+      const [caption, level, data] = await Promise.all([
+        loadCaptionEnabled(),
+        loadVolume(),
+        loadDataBroadcastEnabled(),
+      ]);
       if (cancelled) return;
       setCaptionEnabled(caption);
+      setDataEnabled(data);
       setVolumeState(level);
       volumeRef.current = level;
       hydratedRef.current = true;
@@ -79,6 +106,7 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
         session.b25.onOutput = undefined;
         void session.b25.request('playback', { enabled: false }).catch(() => {});
       }
+      setAttached(undefined);
       setVideoVisible(false);
       setPlaying(false);
       setPlayback(undefined);
@@ -115,6 +143,10 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
         });
       };
       await session.b25.request('playback', { enabled: true });
+      setAttached((previous) => ({
+        serviceId: Number(serviceId),
+        serial: (previous?.serial ?? 0) + 1,
+      }));
       setPlaying(true);
       setStatus('Playing');
       addLog(`Playback started for service ${serviceId}`);
@@ -247,6 +279,86 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
   }, [volume]);
 
   useEffect(() => {
+    if (!hydratedRef.current) return;
+    void saveValue(DATA_BROADCAST_KEY, dataEnabled, settingsStore);
+  }, [dataEnabled]);
+
+  // One data broadcasting engine per attached player; a fresh one drops the old service's BML state.
+  useEffect(() => {
+    const b25 = sessionRef.current?.b25;
+    const host = bmlHostRef.current;
+    const canvas = canvasRef.current;
+    if (!dataEnabled || !attached || !b25 || !host || !canvas) return;
+    let data: DataBroadcast | undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { DataBroadcast } = await import('../../media/data-broadcast');
+        if (cancelled) return;
+        data = new DataBroadcast(
+          host,
+          canvas,
+          attached.serviceId,
+          (message) => addLog(message, true),
+          setDataVisible,
+        );
+        data.setHidden(!!pipHandleRef.current);
+        if (showDataRef.current) data.pressData();
+        showDataRef.current = false;
+        dataRef.current = data;
+        b25.onDataOutput = (bytes) => data?.push(bytes);
+        await b25.request('data', { enabled: true });
+      } catch (error) {
+        if (!cancelled) addLog(error instanceof Error ? error.message : String(error), true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      b25.onDataOutput = undefined;
+      void b25.request('data', { enabled: false }).catch(() => {});
+      data?.destroy();
+      if (dataRef.current === data) dataRef.current = undefined;
+      setDataVisible(false);
+    };
+  }, [dataEnabled, attached, sessionRef, addLog]);
+
+  useEffect(() => {
+    dataRef.current?.setHidden(pipEnabled);
+  }, [pipEnabled]);
+
+  // Remote keys from the keyboard; controls and form fields keep their own keys.
+  useEffect(() => {
+    if (!dataEnabled || !attached) return;
+    const onKey = (event: KeyboardEvent) => {
+      const data = dataRef.current;
+      if (!data || pipHandleRef.current) return;
+      const key = aribKeyFromEvent(event);
+      if (key === undefined) return;
+      event.preventDefault();
+      data.key(key, event.type === 'keydown');
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keyup', onKey);
+    };
+  }, [dataEnabled, attached]);
+
+  // The control bar's d is the remote's d; the first press also starts the engine.
+  const pressData = useCallback(() => {
+    if (dataRef.current) dataRef.current.pressData();
+    else {
+      showDataRef.current = true;
+      setDataEnabled(true);
+    }
+  }, []);
+
+  const pressDataKey = useCallback((key: number, down: boolean) => {
+    dataRef.current?.key(key, down);
+  }, []);
+
+  useEffect(() => {
     const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
@@ -320,6 +432,10 @@ export function usePlayback({ sessionRef, addLog, setStatus, setBusy }: UsePlayb
     videoVisible,
     captionEnabled,
     setCaptionEnabled,
+    pressData,
+    dataVisible,
+    pressDataKey,
+    bmlHostRef,
     pipEnabled,
     pipControlsHost,
     pipSupported,

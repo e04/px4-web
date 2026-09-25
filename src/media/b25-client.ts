@@ -34,11 +34,16 @@ export class B25Worker {
   snapshot?: B25Snapshot;
   error?: string;
   onOutput?: (bytes: ArrayBuffer) => void;
+  onDataOutput?: (bytes: ArrayBuffer) => void;
   constructor(private readonly apdu: (bytes: Uint8Array) => Promise<Uint8Array>) {
     this.worker.onmessage = (event) => {
       const data = event.data;
       if (data.type === 'clear-ts') {
         this.onOutput?.(data.bytes);
+        return;
+      }
+      if (data.type === 'data-ts') {
+        this.onDataOutput?.(data.bytes);
         return;
       }
       if (data.type === 'apdu') {

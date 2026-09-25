@@ -25,7 +25,9 @@
     "aribb24.js": "^2.0.25",
     "idb-keyval": "^6.3.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "web-bml": "^1.0.1",
+    "web-bml-fonts": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

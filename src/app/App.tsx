@@ -120,6 +120,7 @@ export default function App() {
                 ambientCanvasRef={playback.ambientCanvasRef}
                 videoWrapRef={playback.videoWrapRef}
                 videoPaperRef={playback.videoPaperRef}
+                bmlHostRef={playback.bmlHostRef}
                 ambientVisible={playback.ambientVisible}
                 playing={playback.playing}
                 stationName={selectedProgram?.stationName ?? ''}
@@ -131,9 +132,12 @@ export default function App() {
                 isFullscreen={playback.isFullscreen}
                 guideOpen={guideOpen}
                 captionEnabled={playback.captionEnabled}
+                dataVisible={playback.dataVisible}
                 controlsIdle={playback.controlsIdle}
                 volume={playback.volume}
                 onToggleCaption={() => playback.setCaptionEnabled((current) => !current)}
+                onPressData={playback.pressData}
+                onDataKey={playback.pressDataKey}
                 onTogglePip={() => void playback.togglePip(!playback.pipEnabled)}
                 onToggleFullscreen={() => void playback.toggleFullscreen()}
                 onVolumeChange={playback.setVolume}
@@ -205,6 +209,12 @@ export default function App() {
           </Text>
           <Anchor size="10px" c="dimmed" href="./media-licenses/LICENSE.md">
             FFmpeg license
+          </Anchor>
+          <Text size="10px" c="dimmed">
+            ·
+          </Text>
+          <Anchor size="10px" c="dimmed" href="./bml-licenses/NOTICE.md">
+            web-bml license
           </Anchor>
           <Text size="10px" c="dimmed">
             ·

@@ -1,5 +1,22 @@
 import { TsAnalyzer } from '../transport/analyzer';
-import { mpegCrc32 } from '../transport/psi';
+import { mpegCrc32, type Service } from '../transport/psi';
+
+// PAT, SDT, EIT, TOT/TDT and BIT: web-bml's clock, program info and broadcaster database.
+const DATA_SI_PIDS = new Set([0x00, 0x11, 0x12, 0x14, 0x24]);
+// DSM-CC data carousel (0x0D) and stream event (0x0B/0x0C) elementary streams.
+const DATA_STREAM_TYPES = new Set([0x0b, 0x0c, 0x0d]);
+
+function hasPcr(p: Uint8Array): boolean {
+  return (p[3] & 0x20) !== 0 && p[4] >= 7 && (p[5] & 0x10) !== 0;
+}
+
+function isDataPacket(p: Uint8Array, pid: number, service: Service): boolean {
+  if (DATA_SI_PIDS.has(pid) || pid === service.pmtPid) return true;
+  if (service.streams!.some((s) => s.pid === pid && DATA_STREAM_TYPES.has(s.streamType)))
+    return true;
+  // The PCR PID is often the video PID; only its PCR is needed.
+  return pid === service.pcrPid && hasPcr(p);
+}
 
 // B25 retains the multiplex; this output boundary publishes only the chosen service.
 export class ServiceFilter {
@@ -10,6 +27,9 @@ export class ServiceFilter {
   private announced?: string;
   private pmtPackets: Uint8Array[] = [];
   private pmtPid?: number;
+  /** Also collect the SI, PCR and DSM-CC packets data broadcasting (web-bml) needs. */
+  dataEnabled = false;
+  private dataPackets: Uint8Array[] = [];
   constructor(readonly serviceId: number) {
     if (!Number.isInteger(serviceId) || serviceId < 1 || serviceId > 65535)
       throw new Error('Invalid service ID');
@@ -44,6 +64,7 @@ export class ServiceFilter {
       const psi = this.analyzer.psi;
       const service = psi.services.find((s) => s.serviceId === this.serviceId);
       if (!service?.streams) continue;
+      if (this.dataEnabled && isDataPacket(p, pid, service)) this.dataPackets.push(p.slice());
       const key = `${psi.transportStreamId}/${psi.patVersion}/${service.pmtPid}/${service.pmtVersion}`;
       const changed = this.announced !== key;
       if (pid === 0 || this.announced !== key) {
@@ -94,6 +115,13 @@ export class ServiceFilter {
     this.tail = input.slice(offset);
     const output = new Uint8Array(packets.length * 188);
     packets.forEach((p, i) => output.set(p, i * 188));
+    return output;
+  }
+  /** Drain the packets collected for data broadcasting since the last call. */
+  takeData(): Uint8Array {
+    const output = new Uint8Array(this.dataPackets.length * 188);
+    this.dataPackets.forEach((p, i) => output.set(p, i * 188));
+    this.dataPackets = [];
     return output;
   }
   finish(): void {
