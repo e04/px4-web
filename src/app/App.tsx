@@ -197,6 +197,9 @@ export default function App() {
                 playback={playback.playback}
                 deviceLabel={session.deviceLabel}
                 cardless={session.cardless}
+                lnb={session.lnb}
+                lnbSupported={session.lnbSupported}
+                onLnbChange={(on) => void session.setLnb(on)}
                 b25={session.b25}
                 status={status}
               />

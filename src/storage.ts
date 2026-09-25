@@ -13,6 +13,7 @@ export const SERVICE_KEY = 'px4-service';
 export const CAPTION_KEY = 'px4-caption';
 export const VOLUME_KEY = 'px4-volume';
 export const DATA_BROADCAST_KEY = 'px4-data-broadcast';
+export const LNB_KEY = 'px4-lnb';
 
 export async function loadValue<T>(key: string, store: UseStore): Promise<T | undefined> {
   try {

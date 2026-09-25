@@ -18,7 +18,14 @@ import {
   type ScanEntry,
   type ScanMap,
 } from '../../scan';
-import { CHANNEL_KEY, SERVICE_KEY, loadValue, saveValue, settingsStore } from '../../storage';
+import {
+  CHANNEL_KEY,
+  LNB_KEY,
+  SERVICE_KEY,
+  loadValue,
+  saveValue,
+  settingsStore,
+} from '../../storage';
 import { DEFAULT_CHANNEL, loadChannel, stateLabels } from '../format';
 import { loadEpg, mergeEpg, saveEpg, type EpgMap } from '../../epg';
 import { crawlEpg } from '../../epg-crawl';
@@ -169,6 +176,10 @@ export function useReceiverSession({
   const [connected, setConnected] = useState(false);
   const [deviceLabel, setDeviceLabel] = useState('');
   const [cardless, setCardless] = useState(false);
+  const [lnb, setLnbState] = useState(false);
+  const lnbRef = useRef(lnb);
+  lnbRef.current = lnb;
+  const [lnbSupported, setLnbSupported] = useState(true);
   const [b25, setB25] = useState<Record<string, number | boolean | undefined>>();
   const scanRef = useRef(scan);
   scanRef.current = scan;
@@ -235,6 +246,7 @@ export function useReceiverSession({
     setB25(undefined);
     setDeviceLabel('');
     setCardless(false);
+    setLnbSupported(true);
     setStatus('Disconnected');
     if (message) addLog(message);
   };
@@ -246,6 +258,26 @@ export function useReceiverSession({
     addLog(message, true);
     await closeSession('Disconnected after playback failure');
     setStatus(`Playback error: ${message}`);
+  };
+
+  useEffect(() => {
+    void loadValue<boolean>(LNB_KEY, settingsStore).then((saved) => {
+      if (saved) setLnbState(true);
+    });
+  }, []);
+
+  // Board power is also switched on the next initialize when no session is open.
+  const setLnb = async (on: boolean) => {
+    setLnbState(on);
+    void saveValue(LNB_KEY, on, settingsStore);
+    const receiver = sessionRef.current?.receiver;
+    if (!receiver) return;
+    try {
+      await receiver.setLnb(on);
+      addLog(`LNB power ${on ? 'on' : 'off'}`);
+    } catch (error) {
+      addLog(`LNB power: ${error instanceof Error ? error.message : String(error)}`, true);
+    }
   };
 
   useEffect(() => {
@@ -620,6 +652,8 @@ export function useReceiverSession({
       setConnected(true);
       setDeviceLabel(session.deviceInfo.productName);
       setCardless(!session.deviceInfo.hasCardReader);
+      setLnbSupported(session.receiver.bridge.hasLnb);
+      session.receiver.lnb = lnbRef.current;
       addLog(
         `${session.deviceInfo.productName} connected${session.deviceInfo.devId != null ? ` (dev ${session.deviceInfo.devId})` : ''}${session.deviceInfo.hasCardReader ? '' : ' [no card reader]'}`,
       );
@@ -843,6 +877,8 @@ export function useReceiverSession({
         setConnected(true);
         setDeviceLabel(fresh.deviceInfo.productName);
         setCardless(!fresh.deviceInfo.hasCardReader);
+        setLnbSupported(fresh.receiver.bridge.hasLnb);
+        fresh.receiver.lnb = lnbRef.current;
         addLog(
           `${fresh.deviceInfo.productName} connected${fresh.deviceInfo.devId != null ? ` (dev ${fresh.deviceInfo.devId})` : ''}${fresh.deviceInfo.hasCardReader ? '' : ' [no card reader]'}`,
         );
@@ -934,6 +970,9 @@ export function useReceiverSession({
     connected,
     deviceLabel,
     cardless,
+    lnb,
+    lnbSupported,
+    setLnb,
     b25,
     previewTarget,
     previewState:

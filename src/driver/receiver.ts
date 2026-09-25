@@ -60,6 +60,8 @@ export class Receiver {
   private callQueue: Promise<unknown> = Promise.resolve();
   // After a preview is adopted the second tuner pair plays and the first one is free.
   private swapped = false;
+  /** Requested LNB power; applied on initialize and cut on stop. */
+  lnb = false;
   constructor(
     readonly bridge: It930xBridge,
     private readonly maxPacketSize: number,
@@ -155,6 +157,8 @@ export class Receiver {
       }
       this.check();
       await this.bridge.power(true);
+      this.check();
+      if (this.lnb) await this.bridge.lnbPower(true);
       this.check();
       const model = { px4: 0, isdb2056: 1, isdb2056n: 2, mlt: 3 }[this.bridge.family];
       await this.call('receiver_init', model);
@@ -339,6 +343,13 @@ export class Receiver {
     return true;
   }
 
+  /** Switch LNB power now when the board is powered, otherwise on the next initialize. */
+  async setLnb(on: boolean): Promise<void> {
+    this.lnb = on;
+    if (['ready', 'tuning', 'locked', 'streaming'].includes(this.state))
+      await this.bridge.lnbPower(on);
+  }
+
   /** Put the auxiliary tuner back to sleep. */
   async auxiliaryStop(): Promise<void> {
     if (this.tuner && ['ready', 'tuning', 'locked', 'streaming'].includes(this.state))
@@ -361,6 +372,11 @@ export class Receiver {
         if (this.tuner) await this.call('receiver_stop');
       } catch (error) {
         first = error;
+      }
+      try {
+        if (this.lnb) await this.bridge.lnbPower(false);
+      } catch (error) {
+        first ??= error;
       }
       try {
         await this.bridge.power(false);

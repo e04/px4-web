@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef } from 'react';
-import { Box, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Box, Button, Checkbox, Group, Modal, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 import type { TransportSnapshot } from '../../transport/pipeline';
 import type { ProgramEvent } from '../../transport/program-info';
 import type { PlayerSnapshot } from '../hooks/usePlayback';
@@ -61,6 +61,9 @@ interface MetricsGridProps {
   playback: PlayerSnapshot | undefined;
   deviceLabel: string;
   cardless: boolean;
+  lnb: boolean;
+  lnbSupported: boolean;
+  onLnbChange: (on: boolean) => void;
   b25: Record<string, number | boolean | undefined> | undefined;
   status: string;
 }
@@ -70,9 +73,13 @@ export function MetricsGrid({
   playback,
   deviceLabel,
   cardless,
+  lnb,
+  lnbSupported,
+  onLnbChange,
   b25,
   status,
 }: MetricsGridProps) {
+  const [confirmLnb, setConfirmLnb] = useState(false);
   const metrics: [string, string][] = [
     ['Bitrate', format(transport?.mbps, ' Mbps', 2)],
     ['Max input gap', format(transport?.maxGapMs, ' ms', 0)],
@@ -106,7 +113,27 @@ export function MetricsGrid({
             </Text>
           </Box>
         ))}
-        <Box style={{ gridColumn: '1 / -1', minWidth: 0 }}>
+        <Box>
+          <Text component="dt" size="10px" c="dimmed" mb={5}>
+            LNB Power
+          </Text>
+          <Box component="dd" m={0}>
+            <Checkbox
+              size="xs"
+              aria-label="LNB Power"
+              label={lnb ? 'ON' : 'OFF'}
+              styles={{ label: { fontFamily: 'monospace' } }}
+              checked={lnb}
+              disabled={!lnbSupported}
+              onChange={(event) => {
+                // Powering the LNB puts DC on the antenna cable; ask before switching on.
+                if (event.currentTarget.checked) setConfirmLnb(true);
+                else onLnbChange(false);
+              }}
+            />
+          </Box>
+        </Box>
+        <Box style={{ gridColumn: '2 / -1', minWidth: 0 }}>
           <Text component="dt" size="10px" c="dimmed" mb={5}>
             Status
           </Text>
@@ -115,6 +142,28 @@ export function MetricsGrid({
           </Text>
         </Box>
       </SimpleGrid>
+      <Modal
+        opened={confirmLnb}
+        onClose={() => setConfirmLnb(false)}
+        title="Turn on LNB power?"
+        centered
+      >
+        <Group justify="flex-end" gap="xs">
+          <Button color="gray" variant="subtle" onClick={() => setConfirmLnb(false)}>
+            Cancel
+          </Button>
+          <Button
+            color="dark"
+            variant="white"
+            onClick={() => {
+              setConfirmLnb(false);
+              onLnbChange(true);
+            }}
+          >
+            Turn on
+          </Button>
+        </Group>
+      </Modal>
     </Paper>
   );
 }

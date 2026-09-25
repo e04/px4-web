@@ -151,6 +151,15 @@ export class It930xBridge {
     }
   }
 
+  /** ISDB2056 boards have no LNB supply; the others drive it from GPIO11. */
+  get hasLnb(): boolean {
+    return !this.family.startsWith('isdb2056');
+  }
+
+  async lnbPower(on: boolean): Promise<void> {
+    if (this.hasLnb) await this.write(0xd8d3, on ? 1 : 0);
+  }
+
   async power(on: boolean): Promise<void> {
     if (on) {
       await this.write(this.resetRegister, 0);
