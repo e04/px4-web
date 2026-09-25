@@ -341,6 +341,17 @@ body {
   touch-action: none;
 }
 
+.data-remote-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.data-remote-gear {
+  width: 26px;
+  height: 26px;
+  background: transparent;
+}
+
 .data-remote-key:active {
   filter: brightness(1.4);
 }

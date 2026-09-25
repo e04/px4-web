@@ -91,7 +91,6 @@ export function DataRemote({ onKey, readZipCode, writeZipCode }: DataRemoteProps
       <div className="data-remote-row">
         {key('d', AribKey.Data, 'd', { fontWeight: 700 })}
         {key('Back', AribKey.Back, '↩')}
-        <ZipCodeSettings read={readZipCode} write={writeZipCode} />
       </div>
       <div className="data-remote-row">
         {COLORS.map(([label, code, color]) =>
@@ -109,6 +108,9 @@ export function DataRemote({ onKey, readZipCode, writeZipCode }: DataRemoteProps
         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((digit) =>
           key(String(digit), AribKey.Digit0 + digit, digit),
         )}
+      </div>
+      <div className="data-remote-footer">
+        <ZipCodeSettings read={readZipCode} write={writeZipCode} />
       </div>
     </div>
   );
@@ -147,7 +149,7 @@ function ZipCodeSettings({
     >
       <Popover.Target>
         <UnstyledButton
-          className="data-remote-key"
+          className="data-remote-key data-remote-gear"
           aria-label="Data broadcasting settings"
           title="Data broadcasting settings"
           onClick={() => {
